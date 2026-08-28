@@ -1,0 +1,604 @@
+<title>Nine Steps, Real Numbers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap">
+
+<style>
+:root{
+  --paper:#EFF2F1; --surface:#FCFDFC; --surface-2:#F5F8F7;
+  --ink:#141918; --ink-2:#3B4544; --muted:#69736F; --rule:#D3DAD7; --rule-2:#E4E9E7;
+  --accent:#146B66; --accent-soft:#146B661a;
+  --c-knot:#B25A12; --c-knot-soft:#b25a121a; --c-chunk:#6A3C8C; --c-chunk-soft:#6a3c8c17;
+  --ok:#1F6B43; --bad:#9C3626;
+  --shadow:0 1px 2px #14191807, 0 6px 18px #1419180a;
+  --sans:"IBM Plex Sans Condensed", ui-sans-serif, system-ui, sans-serif;
+  --serif:"IBM Plex Serif", Georgia, "Times New Roman", serif;
+  --mono:"IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --measure:66ch; --wide:1080px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0D1112; --surface:#141A1B; --surface-2:#182022;
+    --ink:#DEE6E4; --ink-2:#B7C2BF; --muted:#8A9793; --rule:#26302F; --rule-2:#1D2627;
+    --accent:#54B3AC; --accent-soft:#54b3ac1f;
+    --c-knot:#DE8B3F; --c-knot-soft:#de8b3f1f; --c-chunk:#AE86D6; --c-chunk-soft:#ae86d61c;
+    --ok:#63C08C; --bad:#D2705C;
+    --shadow:0 1px 2px #00000040, 0 8px 24px #00000038;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0D1112; --surface:#141A1B; --surface-2:#182022;
+  --ink:#DEE6E4; --ink-2:#B7C2BF; --muted:#8A9793; --rule:#26302F; --rule-2:#1D2627;
+  --accent:#54B3AC; --accent-soft:#54b3ac1f;
+  --c-knot:#DE8B3F; --c-knot-soft:#de8b3f1f; --c-chunk:#AE86D6; --c-chunk-soft:#ae86d61c;
+  --ok:#63C08C; --bad:#D2705C;
+  --shadow:0 1px 2px #00000040, 0 8px 24px #00000038;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--serif); font-size:17px; line-height:1.62}
+.wrap{max-width:var(--wide); margin:0 auto; padding:0 24px 96px}
+
+header.mast{padding:64px 0 36px; border-bottom:1px solid var(--rule)}
+.eyebrow{font-family:var(--mono); font-size:11.5px; font-weight:500;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--muted)}
+h1{font-family:var(--sans); font-weight:700; font-size:clamp(40px,7vw,72px);
+  line-height:.98; letter-spacing:-.02em; margin:14px 0 0; text-wrap:balance}
+h1 em{font-style:normal; color:var(--accent)}
+.standfirst{max-width:var(--measure); margin:20px 0 0; font-size:19px; color:var(--ink-2)}
+
+.body{display:grid; grid-template-columns:1fr; gap:0}
+nav.rail{display:none}
+@media (min-width:1180px){
+  .body{grid-template-columns:150px minmax(0,1fr); gap:44px; align-items:start}
+  nav.rail{display:block; position:sticky; top:28px; padding-top:52px}
+}
+nav.rail ol{list-style:none; margin:0; padding:0; border-left:1px solid var(--rule)}
+nav.rail a{display:block; padding:7px 0 7px 14px; margin-left:-1px;
+  border-left:2px solid transparent; font-family:var(--mono); font-size:11.5px;
+  color:var(--muted); text-decoration:none; line-height:1.35}
+nav.rail a:hover{color:var(--ink)}
+nav.rail a.on{color:var(--accent); border-left-color:var(--accent)}
+nav.rail a .n{opacity:.6; margin-right:7px}
+
+main{min-width:0}
+section{padding:52px 0; border-bottom:1px solid var(--rule-2)}
+section:last-of-type{border-bottom:0}
+.stage{display:flex; align-items:baseline; gap:14px; margin-bottom:6px}
+.stage .num{font-family:var(--mono); font-size:12px; font-weight:600; color:var(--accent); letter-spacing:.08em}
+.stage .kicker{font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--muted)}
+h2{font-family:var(--sans); font-weight:600; font-size:clamp(26px,3.2vw,36px);
+  line-height:1.1; letter-spacing:-.015em; margin:0 0 16px; text-wrap:balance; max-width:24ch}
+h3{font-family:var(--sans); font-weight:600; font-size:17px; margin:30px 0 8px}
+p{max-width:var(--measure); margin:0 0 16px}
+p.lede{font-size:19px; color:var(--ink-2)}
+ul{max-width:var(--measure); padding-left:20px; margin:0 0 16px}
+li{margin-bottom:6px}
+code{font-family:var(--mono); font-size:.87em; background:var(--surface-2);
+  border:1px solid var(--rule-2); border-radius:3px; padding:.1em .34em}
+a{color:var(--accent); text-underline-offset:2px}
+.m{font-family:var(--serif); font-style:italic}
+.m sub{font-style:normal; font-size:.72em; font-family:var(--mono)}
+
+/* --- numeric exhibits --- */
+.ex{margin:22px 0; border:1px solid var(--rule); border-radius:5px;
+  background:var(--surface); box-shadow:var(--shadow); overflow:hidden}
+.ex-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;
+  padding:11px 16px; border-bottom:1px solid var(--rule-2); background:var(--surface-2)}
+.ex-title{font-family:var(--mono); font-size:11px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--muted); font-weight:500}
+.ex-shape{font-family:var(--mono); font-size:12px; color:var(--accent); font-weight:600}
+.ex-body{padding:14px 16px; overflow-x:auto}
+pre{margin:0; font-family:var(--mono); font-size:12.5px; line-height:1.75;
+  color:var(--ink); font-variant-numeric:tabular-nums; white-space:pre}
+pre .k{color:var(--c-knot); font-weight:500}
+pre .c{color:var(--c-chunk)}
+pre .dim{color:var(--muted)}
+pre .hi{color:var(--accent); font-weight:600}
+pre .ok{color:var(--ok); font-weight:600}
+
+table.num{border-collapse:collapse; font-family:var(--mono); font-size:12.5px;
+  font-variant-numeric:tabular-nums; white-space:nowrap}
+table.num th{font-size:10.5px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--muted); font-weight:500; text-align:right; padding:0 10px 7px; border-bottom:1px solid var(--rule)}
+table.num th:first-child{text-align:left; padding-left:0}
+table.num td{padding:5px 10px; text-align:right; border-bottom:1px solid var(--rule-2)}
+table.num td:first-child{text-align:left; padding-left:0; color:var(--muted)}
+table.num tr:last-child td{border-bottom:0}
+table.num td.knot{color:var(--c-knot); background:var(--c-knot-soft); font-weight:500}
+table.num td.cp{color:var(--ink-2)}
+table.num th.knot{color:var(--c-knot)}
+table.num tr.gap td{color:var(--muted); text-align:center; padding:2px 0}
+table.num td.good{color:var(--ok)}
+table.num td.zero{color:var(--bad); font-weight:600}
+
+.callout{max-width:var(--measure); margin:18px 0; padding:14px 18px;
+  border-left:2px solid var(--accent); background:var(--surface);
+  border-radius:0 4px 4px 0; font-size:16px; color:var(--ink-2)}
+.callout b{color:var(--ink)}
+.note{max-width:var(--measure); margin:22px 0; padding:16px 18px;
+  border-left:2px solid var(--c-knot); background:var(--surface); border-radius:0 4px 4px 0}
+.note h4{font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--c-knot); margin:0 0 8px; font-weight:600}
+.note p{margin:0; font-size:15.5px}
+
+footer{padding:44px 0 0; border-top:1px solid var(--rule); margin-top:16px;
+  font-size:14.5px; color:var(--muted)}
+footer p{max-width:var(--measure)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <div class="eyebrow">crisp_gym &middot; b-spline pipeline &middot; worked example</div>
+  <h1>Nine Steps,<br><em>Real Numbers</em></h1>
+  <p class="standfirst">
+    One recorded episode carried through every stage of the representation, printing the actual
+    arrays and shapes at each point &mdash; including one B-spline evaluation small enough to
+    check with a pencil.
+  </p>
+</header>
+
+<div class="body">
+<nav class="rail" aria-label="Steps"><ol id="rail"></ol></nav>
+<main>
+
+<section id="s0">
+  <div class="stage"><span class="num">00</span><span class="kicker">The input</span></div>
+  <h2>Seven numbers, twenty times a second</h2>
+  <p class="lede">
+    Everything starts from a recorded episode: a position, an axis-angle rotation, and a gripper
+    command, once per control tick.
+  </p>
+  <div class="ex" id="ex-raw"></div>
+  <p>
+    The rotation is stored as a <em>rotation vector</em>: a direction giving the axis and a length
+    giving the angle in radians. Compact, but a poor thing for a network to regress &mdash; it
+    wraps at 2&pi; and is discontinuous, so two nearly identical orientations can have very
+    different numbers.
+  </p>
+</section>
+
+<section id="s1">
+  <div class="stage"><span class="num">01</span><span class="kicker">Rotation</span></div>
+  <h2>Why seven becomes ten</h2>
+  <p class="lede">
+    The fix is the 6D continuous representation: expand the rotation to a matrix, keep its first
+    two rows, and recover the third with a cross product when you need it back.
+  </p>
+  <div class="ex" id="ex-rot"></div>
+  <p>
+    Six numbers to carry three degrees of freedom is redundant on purpose. The redundancy is what
+    makes it continuous, and it means a network's imperfect output still maps onto a valid
+    rotation &mdash; Gram&ndash;Schmidt normalises the first row, removes its component from the
+    second, and takes the cross product for the third.
+  </p>
+  <div class="callout" id="ex-rot-note"></div>
+</section>
+
+<section id="s2">
+  <div class="stage"><span class="num">02</span><span class="kicker">The fit</span></div>
+  <h2>One spline over the whole episode</h2>
+  <p class="lede">
+    A single cubic B-spline is fitted through all ten dimensions at once, with knots added until
+    the worst error on any frame in any dimension falls under tolerance.
+  </p>
+  <div class="ex" id="ex-fit"></div>
+  <p>
+    Two things to read off. The knot vector opens with the boundary value repeated
+    <span class="m">k</span>+1 = 4 times, which is what clamps the curve to its endpoints. And the
+    interior spacing runs from 1 to 6 frames &mdash; <b>not uniform</b>. The fitter spends knots
+    where the trajectory is doing something and saves them where it is not. That unevenness is the
+    entire economic argument for the method.
+  </p>
+  <div class="ex" id="ex-spacing"></div>
+</section>
+
+<section id="s3">
+  <div class="stage"><span class="num">03</span><span class="kicker">The window</span></div>
+  <h2>Slicing out one chunk</h2>
+  <p class="lede">
+    A chunk is <span class="m">M</span> = <span class="m">chunk_size</span> + 2<span class="m">k</span>
+    consecutive knots plus the control points at the <em>same indices</em>. Nothing is refitted.
+  </p>
+  <div class="ex" id="ex-window"></div>
+  <p>
+    Only the middle is usable. The three knots at each end are the overhang a cubic basis needs,
+    so the valid domain is <code>knots[3]</code> to <code>knots[22]</code> &mdash; and the 26-knot
+    vector admits exactly 26 &minus; 3 &minus; 1 = 22 control points, which is precisely what
+    <code>params[:-(degree+1)]</code> slices off.
+  </p>
+  <p>
+    The claim worth testing is that this window <em>is</em> the global curve on that domain, not an
+    approximation of it:
+  </p>
+  <div class="ex" id="ex-support"></div>
+</section>
+
+<section id="s4">
+  <div class="stage"><span class="num">04</span><span class="kicker">The matrix</span></div>
+  <h2>What the policy actually predicts</h2>
+  <p class="lede">
+    Knots and control points are packed into one dense matrix: column 0 is the knot, columns 1&ndash;10
+    are the control point for that span.
+  </p>
+  <div class="ex" id="ex-matrix"></div>
+  <p>
+    Note the control points are <em>not</em> poses on the path. Row 3's
+    <code>z = 0.5421</code> is a pull toward which the curve bends; the curve at frame 141 actually
+    passes through 0.6188. That is why you cannot read a chunk as a list of waypoints without
+    decoding it.
+  </p>
+</section>
+
+<section id="s5">
+  <div class="stage"><span class="num">05</span><span class="kicker">Time origin</span></div>
+  <h2>Making the knots read as "from now"</h2>
+  <p class="lede">
+    Stored chunks subtract the current frame index from column 0, and only column 0. The control
+    points never move.
+  </p>
+  <div class="ex" id="ex-relative"></div>
+  <div class="callout" id="ex-relative-note"></div>
+</section>
+
+<section id="s6">
+  <div class="stage"><span class="num">06</span><span class="kicker">Decode</span></div>
+  <h2>Back to waypoints</h2>
+  <p class="lede">
+    Sample the curve across its valid domain, convert the rotation back to axis-angle, and compare
+    against what was actually recorded at those frames.
+  </p>
+  <div class="ex" id="ex-decode"></div>
+  <p>
+    Sub-millimetre against the recording. And the count of waypoints is a decode-time choice, not
+    a property of the prediction &mdash; the same 286 numbers give you as many or as few as you
+    ask for, all sampling the same curve:
+  </p>
+  <div class="ex" id="ex-density"></div>
+</section>
+
+<section id="s7">
+  <div class="stage"><span class="num">07</span><span class="kicker">By hand</span></div>
+  <h2>One evaluation, small enough to check</h2>
+  <p class="lede">
+    All of the above rests on evaluating a B-spline. Here is de Boor's algorithm on a toy example
+    you can follow with a pencil, then the same case through scipy.
+  </p>
+  <div class="ex" id="ex-toy"></div>
+  <p>
+    The recursion is a sequence of linear interpolations. Start with the
+    <span class="m">k</span>+1 control points whose basis functions are alive at
+    <span class="m">x</span>, then repeatedly blend neighbouring pairs, each time with a weight
+    <span class="m">&alpha;</span> given by where <span class="m">x</span> sits between two knots.
+    After <span class="m">k</span> rounds one value is left, and it is the curve.
+  </p>
+  <div class="ex" id="ex-toy-steps"></div>
+  <div class="callout" id="ex-toy-result"></div>
+  <p>
+    Every <span class="m">&alpha;</span> is a ratio of knot <em>differences</em>. That is the whole
+    reason step 05 is free: add a constant to every knot and every numerator and denominator shifts
+    by the same amount, so nothing changes.
+  </p>
+</section>
+
+<section id="s8">
+  <div class="stage"><span class="num">08</span><span class="kicker">The edge case</span></div>
+  <h2>Where the last waypoint goes</h2>
+  <p class="lede">
+    The final chunk of an episode runs off the end of the knot vector, and gets padded by repeating
+    the last knot. That has a precise consequence.
+  </p>
+  <div class="ex" id="ex-padded"></div>
+  <p>
+    Basis functions are supported on half-open intervals &mdash; closed on the left, open on the
+    right. With the tail padded, every knot from index 22 onward is the same value, so at exactly
+    <span class="m">x</span> = <span class="m">t</span><sub>max</sub> every basis function has
+    already closed. They sum to <b>0</b> instead of 1, and the curve evaluates to the origin no
+    matter what the control points say.
+  </p>
+  <div class="ex" id="ex-padded-sum"></div>
+  <div class="ex" id="ex-padded-wp"></div>
+  <div class="note">
+    <h4>Consequence</h4>
+    <p>
+      Drop the final decoded waypoint of a padded chunk. It only occurs at the very end of an
+      episode, and the decoder handles it &mdash; but decode a chunk yourself without knowing
+      this and you get a command to drive the end effector to the base of the robot.
+    </p>
+  </div>
+</section>
+
+<section id="s9">
+  <div class="stage"><span class="num">09</span><span class="kicker">Shapes</span></div>
+  <h2>The whole pipeline, dimension by dimension</h2>
+  <div class="ex" id="ex-shapes"></div>
+  <p>
+    The last two rows are the ones that matter for training. Each observation is paired with a
+    single flat 286-vector, and the dataset is 21,560 of them &mdash; which is why the policy is
+    configured with a chunk size of 1: the time axis already lives inside the action.
+  </p>
+</section>
+
+</main>
+</div>
+
+<footer>
+  <p>
+    Every number on this page is printed by <code>bspline/worked_example.py</code> from episode 58
+    of <code>merged_act_finetune_20260528</code>. Run it to reproduce, or point it at another
+    episode. Companions: <em>Knots Instead of Waypoints</em> for the method, and
+    <em>The Windowing Theorem</em> for the machine-checked proofs.
+  </p>
+</footer>
+</div>
+
+<script id="payload" type="application/json">/*__DATA__*/</script>
+<script>
+(() => {
+"use strict";
+const D = JSON.parse(document.getElementById("payload").textContent);
+const M = D.meta;
+
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const f = (v, n) => (v === null || v === undefined || Number.isNaN(v))
+  ? "—" : Number(v).toFixed(n);
+const sci = v => Number(v) === 0 ? "0" : Number(v).toExponential(2);
+
+function ex(id, title, shape, bodyHTML) {
+  const host = document.getElementById(id);
+  if (!host) return;
+  host.innerHTML =
+    `<div class="ex-head"><span class="ex-title">${esc(title)}</span>` +
+    (shape ? `<span class="ex-shape">${esc(shape)}</span>` : "") +
+    `</div><div class="ex-body">${bodyHTML}</div>`;
+}
+const pre = s => `<pre>${s}</pre>`;
+
+function table(headers, rows, opts) {
+  opts = opts || {};
+  let h = "<table class=\"num\"><thead><tr>";
+  headers.forEach((x, i) => {
+    h += `<th${opts.knotCol === i ? ' class="knot"' : ""}>${esc(x)}</th>`;
+  });
+  h += "</tr></thead><tbody>";
+  for (const row of rows) {
+    if (row === null) { h += `<tr class="gap"><td colspan="${headers.length}">⋮</td></tr>`; continue; }
+    h += "<tr>";
+    row.forEach((cell, i) => {
+      const cls = (cell && cell.cls) ? ` class="${cell.cls}"` : "";
+      const val = (cell && cell.v !== undefined) ? cell.v : cell;
+      h += `<td${cls}>${esc(val)}</td>`;
+    });
+    h += "</tr>";
+  }
+  return h + "</tbody></table>";
+}
+
+// ---- 00 raw ----
+{
+  const s = D.step0;
+  const rows = s.rows.map((r, i) => [`frame ${i}`, ...r.map(v => f(v, 4))]);
+  ex("ex-raw", `episode ${M.episode} — first three frames`, `(${s.shape.join(", ")})`,
+    table(["", "x", "y", "z", "rx", "ry", "rz", "grip"], rows) +
+    pre(`\n<span class="dim">${s.shape[0]} frames at ${s.fps} Hz = ${s.seconds.toFixed(1)} s`
+      + `\nunits: metres · axis-angle radians · gripper 0 or 1</span>`));
+}
+
+// ---- 01 rotation ----
+{
+  const s = D.step1;
+  const R = s.R.map(r => r.map(v => f(v, 4).padStart(8)).join(" "));
+  ex("ex-rot", `one rotation at frame ${M.frame}`, "(3,) → (3,3) → (6,)", pre(
+`<span class="dim">axis-angle</span>   v = [${s.axis_angle.map(v => f(v, 4)).join(", ")}]      <span class="k">(3,)</span>
+            |v| = ${f(s.angle_rad, 4)} rad = ${f(s.angle_deg, 1)}°
+           axis = [${s.axis.map(v => f(v, 4)).join(", ")}]
+
+<span class="dim">matrix</span>      R = [ ${R[0]} ]      <span class="k">(3,3)</span>
+                [ ${R[1]} ]
+                [ ${R[2]} ]
+
+<span class="dim">rot6d</span>       = first two ROWS of R, flattened            <span class="k">(6,)</span>
+              [ ${s.d6.map(v => f(v, 4)).join(", ")} ]
+              <span class="hi">└──── R[0,:] ────┘  └──── R[1,:] ────┘</span>
+
+<span class="dim">third row is not stored — recovered as b₁ × b₂</span>
+       R[2,:] = [${s.third_row.map(v => f(v, 4)).join(", ")}]
+      b₁ × b₂ = [${s.cross.map(v => f(v, 4)).join(", ")}]   <span class="ok">identical</span>
+
+<span class="dim">round trip</span>  max|R_back − R| = <span class="ok">${sci(s.roundtrip_matrix_err)}</span>
+            geodesic error  = <span class="ok">${sci(s.geodesic_err)}</span> rad`));
+
+  document.getElementById("ex-rot-note").innerHTML =
+    `<b>The action row grows from 7 to 10.</b><br>` +
+    `<span style="font-family:var(--mono);font-size:12.5px">` +
+    `raw&nbsp;&nbsp;&nbsp;(7,)&nbsp; = [${s.raw7.map(v => f(v, 4)).join(", ")}]<br>` +
+    `policy(10,) = [${s.policy10.map(v => f(v, 4)).join(", ")}]</span>`;
+}
+
+// ---- 02 fit ----
+{
+  const s = D.step2;
+  ex("ex-fit", "fitting one spline to all ten dimensions", `(${s.n_frames}, 10) → knots + coeffs`, pre(
+`<span class="dim">input</span>    ${s.n_frames} frames × 10 dims, sampled at t = 0, 1, …, ${s.n_frames - 1}
+<span class="dim">degree</span>   k = ${s.degree}
+
+<span class="dim">output</span>   knots  <span class="k">(${s.knots_shape[0]},)</span>
+         coeffs <span class="c">(${s.coef_shape.join(", ")})</span>   one control point per row
+
+<span class="dim">counting identity</span>   len(t) = len(c) + k + 1
+                    ${s.identity[0]} = ${s.identity[1]} + ${s.identity[2]} + 1 = ${s.identity[1] + s.identity[2] + 1}   <span class="ok">✓</span>
+
+<span class="dim">first 12 knots</span>  <span class="k">[${s.first_knots.map(v => f(v, 0)).join(", ")}]</span>
+                <span class="dim">└─ t[0..3] all 0: the boundary knot repeated k+1 = ${s.degree + 1} times</span>
+<span class="dim">last  12 knots</span>  <span class="k">[${s.last_knots.map(v => f(v, 0)).join(", ")}]</span>
+
+<span class="dim">compression</span>  ${s.knots_shape[0]} knots for ${s.n_frames} frames = <span class="hi">${f(s.knots_per_frame, 3)} knots/frame</span>
+<span class="dim">fit error</span>    worst of all ${s.n_frames}×10 values = <span class="ok">${f(s.fit_err, 5)}</span>  (tolerance ${M.max_error})
+             position only = <span class="ok">${f(s.pos_err_mm, 2)} mm</span>`));
+
+  const sp = s.spacing;
+  ex("ex-spacing", "interior knot spacing", "frames between adjacent knots",
+    table(["", "min", "median", "mean", "max"],
+      [["spacing", f(sp.min, 2), f(sp.median, 2), f(sp.mean, 2), f(sp.max, 2)]]) +
+    pre(`\n<span class="dim">a 6× range — knots crowd where the trajectory is busy</span>`));
+}
+
+// ---- 03 window ----
+{
+  const s = D.step3;
+  ex("ex-window", `window s = ${s.window}`, `knots (${s.knots_shape[0]},) · coeffs (${s.coef_shape.join(", ")})`, pre(
+`<span class="dim">M = chunk_size + 2·degree = ${M.chunk_size} + 2·${M.degree} = ${s.M}</span>
+
+knots  = t_full[${s.window}:${s.window + s.M}]   <span class="k">(${s.knots_shape[0]},)</span>
+coeffs = c_full[${s.window}:${s.window + s.M}]   <span class="c">(${s.coef_shape.join(", ")})</span>   <span class="dim">← same indices</span>
+
+<span class="dim">the 26 knots, in frames</span>
+<span class="k">[${s.knots.map(v => f(v, 0).padStart(4)).join(",")}]</span>
+     <span class="dim">└── index 3 ─┘</span>                                            <span class="dim">└ index 22</span>
+
+<span class="dim">valid domain</span>  [ knots[${M.degree}], knots[${s.M - M.degree - 1}] ) = [<span class="hi">${f(s.t_min, 0)}</span>, <span class="hi">${f(s.t_max, 0)}</span>)
+              span = <span class="hi">${f(s.span_frames, 0)} frames</span> = ${f(s.span_s, 2)} s
+<span class="dim">control points</span>  params[:-(degree+1)] → first <span class="c">${s.n_ctrl}</span> rows
+                ${s.M} − ${M.degree} − 1 = ${s.n_ctrl}   <span class="ok">same number ✓</span>`));
+
+  ex("ex-support", "the windowed spline vs the global one — z channel",
+    "evaluated inside the valid domain",
+    table(["x (frame)", "windowed", "global", "difference"],
+      s.support_check.map(c => [f(c.x, 3), f(c.local, 6), f(c.global, 6),
+        {v: sci(c.diff), cls: "good"}])) +
+    pre(`\n<span class="dim">not close — bit-for-bit identical. No refit, no approximation.</span>`));
+}
+
+// ---- 04 matrix ----
+{
+  const s = D.step4;
+  const rows = [];
+  s.rows.forEach((r, idx) => {
+    if (idx === 6) rows.push(null);
+    rows.push([`row ${r.i}`, {v: f(r.knot, 2), cls: "knot"},
+      ...r.cp.map(v => ({v: f(v, 4), cls: "cp"}))]);
+  });
+  ex("ex-matrix", "the B-spline parameter matrix", `(${s.shape.join(", ")}) → flat (${s.flat},)`,
+    table(["", "knot", "x", "y", "z", "r0", "r1", "r2", "r3", "r4", "r5", "grip"], rows, {knotCol: 1}) +
+    pre(`\n<span class="dim">${s.shape[0]} rows × ${s.shape[1]} columns = </span><span class="hi">${s.flat} numbers</span><span class="dim">, one vector per observation</span>`));
+}
+
+// ---- 05 relative ----
+{
+  const s = D.step5;
+  ex("ex-relative", `knots shifted to frame ${s.frame}`, "column 0 only",
+    table(["", "absolute", "− frame", "relative"],
+      s.rows.map(r => [`row ${r.i}`, {v: f(r.abs, 2), cls: "knot"}, s.frame,
+        {v: f(r.rel, 2), cls: "knot"}])) +
+    pre(`\n<span class="dim">valid domain becomes</span> [<span class="hi">${f(s.rel_domain[0], 0)}</span>, <span class="hi">${f(s.rel_domain[1], 0)}</span>)`
+      + `<span class="dim">  →  "starts ${f(s.rel_domain[0], 0)} frames from now, lasts ${f(s.rel_domain[1] - s.rel_domain[0], 0)} frames"</span>`));
+
+  document.getElementById("ex-relative-note").innerHTML =
+    `Decoding the absolute and the shifted matrix gives <b>identical</b> waypoints — ` +
+    `max difference <span style="font-family:var(--mono)" class="ok">${sci(s.shift_diff)}</span>. ` +
+    `The control points were never touched, and the evaluation only ever looks at knot differences.`;
+}
+
+// ---- 06 decode ----
+{
+  const s = D.step6;
+  ex("ex-decode", `decoded waypoints vs the recording`, `(${s.shape10.join(", ")}) → (${s.shape7.join(", ")})`,
+    table(["frame", "x", "y", "z", "grip", "recorded x", "y", "z", "err mm"],
+      s.rows.map(r => [f(r.frame, 2), f(r.wp[0], 4), f(r.wp[1], 4), f(r.wp[2], 4), f(r.wp[6], 2),
+        f(r.truth[0], 4), f(r.truth[1], 4), f(r.truth[2], 4),
+        {v: f(r.err_mm, 2), cls: "good"}])));
+
+  ex("ex-density", "how many waypoints you take is a decode-time choice", "same 286 numbers", pre(
+`num_actions =  4  →  <span class="c">(4, 10)</span>
+num_actions =  8  →  <span class="c">(8, 10)</span>
+num_actions = 32  →  <span class="c">(32, 10)</span>
+
+<span class="dim">all three start and end at the same point — they sample one curve at
+different densities. Executing them faster or slower is also free.</span>`));
+}
+
+// ---- 07 toy ----
+{
+  const s = D.step7;
+  ex("ex-toy", "a hand-checkable case", `knots (${s.t.length},) · coeffs (${s.c.length},) · k = ${s.k}`, pre(
+`t = <span class="k">[${s.t.map(v => f(v, 0)).join(", ")}]</span>          <span class="dim">(${s.t.length},)</span>
+c = <span class="c">[${s.c.map(v => f(v, 0)).join(", ")}]</span>                    <span class="dim">(${s.c.length},)</span>
+k = ${s.k}       <span class="dim">identity: ${s.t.length} = ${s.c.length} + ${s.k} + 1</span>  <span class="ok">✓</span>
+
+<span class="dim">evaluate at</span>  x = <span class="hi">${s.x}</span>
+
+<span class="dim">find the span</span>   t[${s.span}] = ${f(s.t[s.span], 0)} ≤ ${s.x} &lt; t[${s.span + 1}] = ${f(s.t[s.span + 1], 0)}   →   s = <span class="hi">${s.span}</span>
+<span class="dim">initialise</span>     dⱼ = c[s−k+j]  →  d₀ = ${f(s.init[0], 0)},  d₁ = ${f(s.init[1], 0)},  d₂ = ${f(s.init[2], 0)}`));
+
+  const sub = ["₀", "₁", "₂", "₃"];
+  let steps = "";
+  let lastR = 0;
+  for (const st of s.steps) {
+    if (st.r !== lastR) { steps += (lastR ? "\n" : "") + `<span class="dim">round r = ${st.r}</span>\n`; lastR = st.r; }
+    steps +=
+`  j=${st.j}:  α = (${s.x} − ${f(st.lo, 0)}) / (${f(st.hi, 0)} − ${f(st.lo, 0)}) = <span class="hi">${f(st.alpha, 4)}</span>
+        d${sub[st.j]} ← (1−${f(st.alpha, 4)})·${f(st.d_prev, 4)} + ${f(st.alpha, 4)}·${f(st.d_cur, 4)} = <span class="c">${f(st.out, 4)}</span>\n`;
+  }
+  ex("ex-toy-steps", "de Boor's triangle", `${s.k} rounds of linear interpolation`, pre(steps.trim()));
+
+  document.getElementById("ex-toy-result").innerHTML =
+    `<b>Result: ${f(s.result, 6)}</b> &nbsp;·&nbsp; ` +
+    `<span style="font-family:var(--mono);font-size:13px">scipy BSpline(t, c, ${s.k})(${s.x}) = ${f(s.scipy, 6)}</span>` +
+    ` &nbsp;·&nbsp; difference <span style="font-family:var(--mono)" class="ok">${sci(s.diff)}</span>`;
+}
+
+// ---- 08 padded ----
+{
+  const s = D.step8;
+  ex("ex-padded", `the last chunk (window s = ${s.window})`, "tail-padded knot vector", pre(
+`<span class="k">[${s.knots.map(v => f(v, 0).padStart(4)).join(",")}]</span>
+                     <span class="dim">└─ index 22 = t_max = ${f(s.t_max, 0)}, and every knot after it is the same</span>`));
+
+  ex("ex-padded-sum", "sum of the basis functions at x = t_max", "partition of unity",
+    table(["chunk", "Σ Bᵢ(t_max)", "expected"],
+      [["padded", {v: f(s.padded_sum, 6), cls: "zero"}, "1"],
+       ["interior", {v: f(s.interior_sum, 6), cls: "good"}, "1"]]));
+
+  ex("ex-padded-wp", "so the last waypoint collapses", "decoded positions",
+    table(["waypoint", "x", "y", "z"],
+      s.waypoints.map((w, i) => {
+        const last = i === s.waypoints.length - 1;
+        return [last ? `${i}  ← dropped` : String(i),
+          {v: f(w[0], 4), cls: last ? "zero" : ""},
+          {v: f(w[1], 4), cls: last ? "zero" : ""},
+          {v: f(w[2], 4), cls: last ? "zero" : ""}];
+      })));
+}
+
+// ---- 09 shapes ----
+ex("ex-shapes", "end to end", "", table(["stage", "shape", "note"],
+  D.step9.map(r => [r.name, {v: r.shape, cls: "cp"}, r.note])));
+
+// ---- rail ----
+{
+  const ol = document.getElementById("rail");
+  const secs = [...document.querySelectorAll("main section")];
+  secs.forEach(sec => {
+    const n = sec.querySelector(".stage .num").textContent;
+    const k = sec.querySelector(".stage .kicker").textContent;
+    const li = document.createElement("li");
+    li.innerHTML = `<a href="#${sec.id}"><span class="n">${n}</span>${k}</a>`;
+    ol.appendChild(li);
+  });
+  const links = [...ol.querySelectorAll("a")];
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      const i = secs.indexOf(e.target);
+      links.forEach((a, j) => a.classList.toggle("on", i === j));
+    });
+  }, {rootMargin: "-15% 0px -70% 0px"});
+  secs.forEach(s => io.observe(s));
+}
+})();
+</script>

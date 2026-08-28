@@ -1,0 +1,973 @@
+<title>Knots Instead of Waypoints</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap">
+
+<style>
+:root{
+  --paper:#EFF2F1; --surface:#FCFDFC; --surface-2:#F5F8F7;
+  --ink:#141918; --ink-2:#3B4544; --muted:#69736F; --rule:#D3DAD7; --rule-2:#E4E9E7;
+  --accent:#146B66; --accent-soft:#146B661a;
+  --c-data:#3B4C50; --c-spline:#146B66; --c-knot:#B25A12; --c-chunk:#6A3C8C; --c-warn:#9C3626;
+  --grid:#DDE3E1;
+  --shadow:0 1px 2px #14191807, 0 6px 18px #1419180a;
+  --sans:"IBM Plex Sans Condensed", ui-sans-serif, system-ui, sans-serif;
+  --serif:"IBM Plex Serif", Georgia, "Times New Roman", serif;
+  --mono:"IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --measure:66ch; --wide:1080px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0D1112; --surface:#141A1B; --surface-2:#182022;
+    --ink:#DEE6E4; --ink-2:#B7C2BF; --muted:#8A9793; --rule:#26302F; --rule-2:#1D2627;
+    --accent:#54B3AC; --accent-soft:#54b3ac1f;
+    --c-data:#9BADB0; --c-spline:#54B3AC; --c-knot:#DE8B3F; --c-chunk:#AE86D6; --c-warn:#D2705C;
+    --grid:#212B2C;
+    --shadow:0 1px 2px #00000040, 0 8px 24px #00000038;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0D1112; --surface:#141A1B; --surface-2:#182022;
+  --ink:#DEE6E4; --ink-2:#B7C2BF; --muted:#8A9793; --rule:#26302F; --rule-2:#1D2627;
+  --accent:#54B3AC; --accent-soft:#54b3ac1f;
+  --c-data:#9BADB0; --c-spline:#54B3AC; --c-knot:#DE8B3F; --c-chunk:#AE86D6; --c-warn:#D2705C;
+  --grid:#212B2C;
+  --shadow:0 1px 2px #00000040, 0 8px 24px #00000038;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--serif); font-size:17px; line-height:1.62;
+  font-feature-settings:"kern";
+}
+.wrap{max-width:var(--wide); margin:0 auto; padding:0 24px 96px}
+
+/* ---------------------------------------------------------------- masthead */
+header.mast{padding:64px 0 40px; border-bottom:1px solid var(--rule)}
+.eyebrow{
+  font-family:var(--mono); font-size:11.5px; font-weight:500;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--muted);
+}
+h1{
+  font-family:var(--sans); font-weight:700; font-size:clamp(40px,7vw,72px);
+  line-height:.98; letter-spacing:-.02em; margin:14px 0 0; text-wrap:balance;
+}
+h1 em{font-style:normal; color:var(--accent)}
+.standfirst{
+  max-width:var(--measure); margin:20px 0 0; font-size:19px; color:var(--ink-2);
+}
+.vitals{
+  display:flex; flex-wrap:wrap; gap:0; margin-top:34px;
+  border-top:1px solid var(--rule-2);
+}
+.vital{
+  flex:1 1 150px; padding:14px 18px 14px 0; border-right:1px solid var(--rule-2);
+}
+.vital:last-child{border-right:0}
+.vital dt{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--muted); margin:0;
+}
+.vital dd{
+  margin:5px 0 0; font-family:var(--sans); font-weight:600; font-size:23px;
+  letter-spacing:-.01em; font-variant-numeric:tabular-nums;
+}
+.vital dd span{font-size:13px; font-weight:500; color:var(--muted); margin-left:3px}
+
+/* ------------------------------------------------------------------ layout */
+.body{display:grid; grid-template-columns:1fr; gap:0}
+/* Rail is hidden by default and revealed by the query below. This order
+   matters: the two rules have equal specificity, so the later one wins. */
+nav.rail{display:none}
+@media (min-width:1180px){
+  .body{grid-template-columns:150px minmax(0,1fr); gap:44px; align-items:start}
+  nav.rail{display:block; position:sticky; top:28px; padding-top:56px}
+}
+nav.rail ol{list-style:none; margin:0; padding:0; border-left:1px solid var(--rule)}
+nav.rail a{
+  display:block; padding:7px 0 7px 14px; margin-left:-1px;
+  border-left:2px solid transparent;
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.04em;
+  color:var(--muted); text-decoration:none; line-height:1.35;
+}
+nav.rail a:hover{color:var(--ink)}
+nav.rail a.on{color:var(--accent); border-left-color:var(--accent)}
+nav.rail a .n{opacity:.6; margin-right:7px}
+
+main{min-width:0}
+section{padding:56px 0; border-bottom:1px solid var(--rule-2)}
+section:last-of-type{border-bottom:0}
+.stage{display:flex; align-items:baseline; gap:14px; margin-bottom:6px}
+.stage .num{
+  font-family:var(--mono); font-size:12px; font-weight:600; color:var(--accent);
+  letter-spacing:.08em;
+}
+.stage .kicker{
+  font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--muted);
+}
+h2{
+  font-family:var(--sans); font-weight:600; font-size:clamp(27px,3.4vw,38px);
+  line-height:1.08; letter-spacing:-.015em; margin:0 0 18px; text-wrap:balance;
+  max-width:22ch;
+}
+h3{
+  font-family:var(--sans); font-weight:600; font-size:19px; letter-spacing:-.005em;
+  margin:34px 0 10px;
+}
+p{max-width:var(--measure); margin:0 0 17px}
+p.lede{font-size:19px; color:var(--ink-2)}
+ul{max-width:var(--measure); padding-left:20px; margin:0 0 17px}
+li{margin-bottom:7px}
+strong{font-weight:600}
+em{font-style:italic}
+code, .num-i{
+  font-family:var(--mono); font-size:.87em; background:var(--surface-2);
+  border:1px solid var(--rule-2); border-radius:3px; padding:.1em .34em;
+  font-variant-numeric:tabular-nums;
+}
+a{color:var(--accent); text-underline-offset:2px}
+
+/* ----------------------------------------------------------------- figures */
+figure{margin:30px 0 8px}
+.frame{
+  background:var(--surface); border:1px solid var(--rule);
+  border-radius:5px; box-shadow:var(--shadow); padding:18px 18px 12px;
+  overflow-x:auto;
+}
+.frame > svg{display:block; width:100%; height:auto; min-width:520px}
+figcaption{
+  max-width:var(--measure); margin-top:12px; font-size:14.5px;
+  color:var(--muted); line-height:1.5;
+}
+figcaption b{color:var(--ink-2); font-weight:500}
+
+.legend{
+  display:flex; flex-wrap:wrap; gap:6px 20px; margin:0 0 14px;
+  font-family:var(--mono); font-size:11.5px; color:var(--ink-2);
+}
+.legend span{display:inline-flex; align-items:center; gap:7px}
+.swatch{width:15px; height:0; border-top-width:2.5px; border-top-style:solid; display:inline-block}
+.swatch.dot{
+  width:8px; height:8px; border:0; border-radius:50%; background:currentColor;
+}
+.sw-data{border-color:var(--c-data); color:var(--c-data)}
+.sw-spline{border-color:var(--c-spline); color:var(--c-spline)}
+.sw-knot{border-color:var(--c-knot); color:var(--c-knot)}
+.sw-chunk{border-color:var(--c-chunk); color:var(--c-chunk)}
+
+/* svg primitives */
+.ax{stroke:var(--rule); stroke-width:1; fill:none}
+.gridline{stroke:var(--grid); stroke-width:1; fill:none}
+.tickt{font-family:var(--mono); font-size:10px; fill:var(--muted)}
+.axlab{font-family:var(--mono); font-size:10px; fill:var(--muted); letter-spacing:.09em; text-transform:uppercase}
+.serieslab{font-family:var(--mono); font-size:10.5px; font-weight:500}
+.l-data{stroke:var(--c-data); stroke-width:1.4; fill:none; stroke-linejoin:round}
+.l-spline{stroke:var(--c-spline); stroke-width:2; fill:none; stroke-linejoin:round}
+.l-chunk{stroke:var(--c-chunk); stroke-width:2.6; fill:none; stroke-linejoin:round; stroke-linecap:round}
+.l-warn{stroke:var(--c-warn); stroke-width:1.4; fill:none}
+.knot-tick{stroke:var(--c-knot); stroke-width:1.1}
+.knot-tick.hi{stroke-width:2.2}
+.wp{fill:var(--c-chunk)}
+.cp{fill:none; stroke:var(--c-chunk); stroke-width:1.2}
+.cp-poly{stroke:var(--c-chunk); stroke-width:1; stroke-dasharray:3 3; fill:none; opacity:.62}
+.band{fill:var(--accent-soft)}
+.band-chunk{fill:var(--c-chunk); opacity:.1}
+.nowline{stroke:var(--ink); stroke-width:1.2; stroke-dasharray:2 3}
+
+/* ------------------------------------------------------------- controls */
+.controls{
+  display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+  padding:14px 16px; margin-bottom:14px;
+  background:var(--surface-2); border:1px solid var(--rule-2); border-radius:5px;
+}
+.controls label{
+  font-family:var(--mono); font-size:11px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--muted);
+}
+input[type=range]{
+  flex:1 1 240px; accent-color:var(--accent); min-width:180px; height:22px;
+}
+input[type=range]:focus-visible{outline:2px solid var(--accent); outline-offset:3px}
+.readout{
+  font-family:var(--mono); font-size:13px; font-weight:500;
+  font-variant-numeric:tabular-nums; color:var(--ink);
+  white-space:nowrap;
+}
+.readout b{color:var(--accent); font-weight:600}
+.segbtns{display:flex; gap:0; border:1px solid var(--rule); border-radius:4px; overflow:hidden}
+.segbtns button{
+  font-family:var(--mono); font-size:11.5px; padding:5px 11px; border:0;
+  background:var(--surface); color:var(--muted); cursor:pointer;
+  border-right:1px solid var(--rule);
+}
+.segbtns button:last-child{border-right:0}
+.segbtns button[aria-pressed=true]{background:var(--accent); color:var(--surface)}
+.segbtns button:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+
+/* ------------------------------------------------------------------ table */
+.tbl{width:100%; border-collapse:collapse; margin:22px 0 8px; font-size:14.5px}
+.tbl th{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--muted); font-weight:500; text-align:right; padding:0 12px 8px;
+  border-bottom:1px solid var(--rule);
+}
+.tbl th:first-child{text-align:left; padding-left:0}
+.tbl td{
+  padding:9px 12px; text-align:right; border-bottom:1px solid var(--rule-2);
+  font-family:var(--mono); font-size:13.5px; font-variant-numeric:tabular-nums;
+}
+.tbl td:first-child{text-align:left; padding-left:0}
+.tbl tr.pick td{background:var(--accent-soft); font-weight:600; color:var(--ink)}
+.tbl tr.pick td:first-child::after{
+  content:"chosen"; font-size:9.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--accent); margin-left:9px;
+}
+
+/* ------------------------------------------------------------------- notes */
+.note{
+  max-width:var(--measure); margin:24px 0; padding:16px 18px;
+  border-left:2px solid var(--c-warn); background:var(--surface);
+  border-radius:0 4px 4px 0;
+}
+.note h4{
+  font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--c-warn); margin:0 0 8px; font-weight:600;
+}
+.note p{margin:0 0 10px; font-size:15.5px}
+.note p:last-child{margin:0}
+
+.matrix-wrap{display:flex; gap:22px; align-items:flex-start; flex-wrap:wrap}
+.matrix-wrap > div:first-child{flex:1 1 380px; min-width:300px}
+.matrix-key{
+  flex:0 1 250px; font-size:14px; color:var(--muted); line-height:1.5;
+  border-left:1px solid var(--rule-2); padding-left:18px;
+}
+.matrix-key dt{
+  font-family:var(--mono); font-size:11px; letter-spacing:.08em; color:var(--ink-2);
+  margin-top:12px; font-weight:500;
+}
+.matrix-key dt:first-child{margin-top:0}
+.matrix-key dd{margin:2px 0 0}
+
+footer{
+  padding:44px 0 0; border-top:1px solid var(--rule); margin-top:16px;
+  font-size:14.5px; color:var(--muted);
+}
+footer p{max-width:var(--measure)}
+footer code{font-size:.9em}
+
+@media (prefers-reduced-motion:reduce){*{animation:none !important; transition:none !important}}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <div class="eyebrow">crisp_gym &middot; b-spline action representation</div>
+  <h1>Knots Instead<br>of <em>Waypoints</em></h1>
+  <p class="standfirst">
+    A policy usually predicts a list of future poses &mdash; one row per control tick, whether the
+    robot is inching toward a grasp or sweeping across the table. This walks through the
+    alternative, on one real episode from our own pick-and-place recordings: fit a spline to the
+    whole demonstration, then predict a slice of <em>that</em>.
+  </p>
+  <dl class="vitals" id="vitals"></dl>
+</header>
+
+<div class="body">
+<nav class="rail" aria-label="Stages">
+  <ol id="rail"></ol>
+</nav>
+
+<main>
+
+<section id="s1">
+  <div class="stage"><span class="num">01</span><span class="kicker">The recording</span></div>
+  <h2>What one episode actually is</h2>
+  <p class="lede">
+    Every frame of a crisp_gym cart7 recording is seven numbers: an end-effector position, an
+    axis-angle rotation, and a gripper command. Twenty frames a second, for as long as the
+    demonstration runs.
+  </p>
+  <p>
+    Below is episode 58 &mdash; two full pick-and-place cycles. The shape to notice is how
+    <em>uneven</em> it is. Long, lazy transits where the arm is just moving across the workspace,
+    then tight clusters of activity around each grasp and release. A fixed-rate list of waypoints
+    spends exactly as many numbers on the boring parts as on the delicate ones.
+  </p>
+  <figure>
+    <div class="legend">
+      <span><i class="swatch sw-data"></i>recorded action</span>
+      <span><i class="swatch dot sw-knot"></i>gripper opens / closes</span>
+    </div>
+    <div class="frame"><svg id="fig-traj" role="img" aria-label="Recorded x, y, z and gripper against frame index"></svg></div>
+    <figcaption>
+      All four plotted channels share one frame axis. The gripper is strictly binary in this
+      dataset &mdash; it only ever holds <b>0</b> or <b>1</b>.
+    </figcaption>
+  </figure>
+</section>
+
+<section id="s2">
+  <div class="stage"><span class="num">02</span><span class="kicker">The fit</span></div>
+  <h2>One spline for the whole demonstration</h2>
+  <p class="lede">
+    Fit a single cubic B-spline through all ten policy dimensions at once, and keep adding knots
+    until the worst error on any frame, in any dimension, drops below a tolerance.
+  </p>
+  <p>
+    That last part is what makes this interesting. The knot placement is not uniform &mdash; the
+    fitter puts knots where the trajectory needs them. Watch the tick strip under the curve: knots
+    crowd together at the grasps and thin out across the transits, which is precisely the
+    unevenness that a fixed-rate waypoint list has no way to exploit.
+  </p>
+  <figure>
+    <div class="legend">
+      <span><i class="swatch sw-data"></i>recorded</span>
+      <span><i class="swatch sw-spline"></i>fitted spline</span>
+      <span><i class="swatch sw-knot"></i>knot positions</span>
+    </div>
+    <div class="frame"><svg id="fig-fit" role="img" aria-label="Fitted spline over the recorded z channel, with knot positions and fit residual"></svg></div>
+    <figcaption>
+      The residual strip at the bottom is the distance between the fitted curve and the recording,
+      in millimetres. It never leaves the tolerance band.
+    </figcaption>
+  </figure>
+  <p id="fit-summary"></p>
+</section>
+
+<section id="s3">
+  <div class="stage"><span class="num">03</span><span class="kicker">The slice</span></div>
+  <h2>A chunk is a window of that spline</h2>
+  <p class="lede">
+    Take a run of consecutive knots &mdash; and, crucially, the control points carrying the
+    <em>same indices</em>. That pair is a valid B-spline in its own right.
+  </p>
+  <p>
+    B-splines have local support: each control point only influences the curve over a short span
+    of knots. So a window of the knot vector plus the matching control points reproduces the
+    global curve <em>exactly</em> over the window's interior &mdash; no refitting, no
+    approximation. That interior is what gets predicted and executed; the extra
+    <span class="num-i" id="deg-pad"></span> knots on each end are just the overhang the cubic
+    basis needs.
+  </p>
+  <figure>
+    <div class="frame"><svg id="fig-window" role="img" aria-label="The global knot vector with one chunk window highlighted"></svg></div>
+    <figcaption>
+      The full knot vector as a strip, with one window picked out. Because knot spacing varies,
+      windows of identical <em>index</em> width cover very different amounts of <em>time</em>.
+    </figcaption>
+  </figure>
+</section>
+
+<section id="s4">
+  <div class="stage"><span class="num">04</span><span class="kicker">The chunk, up close</span></div>
+  <h2>Drag through the episode</h2>
+  <p class="lede">
+    This is the whole method in one picture. Move the scrubber to pick a frame; the panel shows
+    the chunk that frame is assigned, the curve it encodes, and the waypoints you get by decoding
+    it.
+  </p>
+  <div class="controls">
+    <label for="scrub">Frame</label>
+    <input type="range" id="scrub" min="0" max="10" value="0" step="1" aria-describedby="scrub-out">
+    <span class="readout" id="scrub-out"></span>
+    <div class="segbtns" role="group" aria-label="Channel">
+      <button type="button" data-dim="2" aria-pressed="true">z</button>
+      <button type="button" data-dim="0" aria-pressed="false">x</button>
+      <button type="button" data-dim="1" aria-pressed="false">y</button>
+      <button type="button" data-dim="3" aria-pressed="false">gripper</button>
+    </div>
+  </div>
+  <figure>
+    <div class="legend">
+      <span><i class="swatch sw-data"></i>recorded</span>
+      <span><i class="swatch sw-chunk"></i>chunk's curve</span>
+      <span><i class="swatch dot sw-chunk"></i>decoded waypoints</span>
+      <span><i class="swatch sw-knot"></i>this chunk's knots</span>
+    </div>
+    <div class="frame"><svg id="fig-explore" role="img" aria-label="Interactive view of the chunk assigned to the selected frame"></svg></div>
+    <figcaption id="explore-cap"></figcaption>
+  </figure>
+
+  <h3>What the policy actually emits</h3>
+  <p>
+    Stored form is a dense matrix: one row per knot, one column for the knot value and one for
+    each action dimension. Flattened, that is
+    <span class="num-i" id="flat-dim"></span> numbers &mdash; a single vector for the network to
+    regress.
+  </p>
+  <div class="matrix-wrap">
+    <div class="frame"><svg id="fig-matrix" role="img" aria-label="The B-spline parameter matrix for the selected frame"></svg></div>
+    <dl class="matrix-key">
+      <dt>column 0 &mdash; knots</dt>
+      <dd>Where in time, measured in frames from <em>now</em>, each span begins. Must come out
+        non-decreasing.</dd>
+      <dt>columns 1&ndash;10 &mdash; control points</dt>
+      <dd>Position, a six-number continuous rotation, and the gripper. Not poses on the path &mdash;
+        they pull the curve toward them.</dd>
+    </dl>
+  </div>
+</section>
+
+<section id="s5">
+  <div class="stage"><span class="num">05</span><span class="kicker">The assignment</span></div>
+  <h2>Every frame gets one</h2>
+  <p class="lede">
+    Each frame is handed the last chunk whose window has not yet opened, with the knot column
+    shifted so it reads as time-from-now. Neighbouring frames usually share a chunk and differ by
+    a single subtracted frame.
+  </p>
+  <figure>
+    <div class="frame"><svg id="fig-assign" role="img" aria-label="The time window each frame's chunk covers, across the episode"></svg></div>
+    <figcaption>
+      For each frame on the horizontal axis, the vertical bar shows how far ahead its chunk
+      reaches. Tall bars are the easy transits; the pinched sections are the grasps, where dense
+      knots mean a chunk buys less time.
+    </figcaption>
+  </figure>
+</section>
+
+<section id="s6">
+  <div class="stage"><span class="num">06</span><span class="kicker">The decode</span></div>
+  <h2>Back to something the arm can run</h2>
+  <p class="lede">
+    Sample the chunk's curve at as many points as you want across its valid span, convert the
+    rotation back to axis-angle, and you have ordinary end-effector waypoints again.
+  </p>
+  <p>
+    Two properties fall out. First, <b>how many</b> waypoints you take is a decode-time choice, not
+    a property of the prediction &mdash; ask for 8 or 64 and you are sampling the same curve.
+    Second, <b>how fast</b> you run them is also a decode-time choice: the knots say the span is
+    worth some number of frames, and nothing forces you to spend that many. Halve it and the arm
+    traces the identical path in half the time.
+  </p>
+  <figure>
+    <div class="frame"><svg id="fig-error" role="img" aria-label="Decode error against the recording across the episode"></svg></div>
+    <figcaption id="error-cap"></figcaption>
+  </figure>
+</section>
+
+<section id="s7">
+  <div class="stage"><span class="num">07</span><span class="kicker">The tuning</span></div>
+  <h2>Why the tolerance matters more than anything</h2>
+  <p class="lede">
+    Tolerance sets knot density, knot density sets how much time a chunk buys. Too tight and the
+    spline needs nearly a knot per frame &mdash; at which point you have reinvented the waypoint
+    list, with extra steps.
+  </p>
+  <p>
+    The reference implementation ships <code>max_error = 0.002</code>. On their 10&nbsp;Hz data
+    that is fine; on ours it produces almost no compression. The sweep below is this episode,
+    measured.
+  </p>
+  <table class="tbl">
+    <thead><tr>
+      <th>max_error</th><th>knots / frame</th><th>position error</th><th>chunk covers</th>
+    </tr></thead>
+    <tbody id="sweep-body"></tbody>
+  </table>
+  <p>
+    We settled on <code>0.01</code>: positions stay inside a few millimetres while a chunk still
+    reaches roughly two seconds ahead. And <code>chunk_size = 20</code> rather than the reference's
+    10, because our recordings run at 20&nbsp;Hz where theirs run at 10 &mdash; twice the frames
+    for the same wall-clock horizon.
+  </p>
+</section>
+
+<section id="s8">
+  <div class="stage"><span class="num">08</span><span class="kicker">The training run</span></div>
+  <h2>What went into the model</h2>
+  <p>
+    The whole 70-episode <code>merged_act_finetune_20260528</code> dataset was converted this way:
+    the action column becomes a flat <span class="num-i" id="flat-dim-2"></span>-number vector,
+    observations and videos untouched. An ACT policy then predicts one such vector per
+    observation &mdash; a chunk size of 1 at the policy level, because the time axis already lives
+    <em>inside</em> the action.
+  </p>
+  <p>
+    Verified before training, by decoding stored actions and comparing against the source
+    recording across the full dataset: <b>within 5.4&nbsp;mm and 0.78&deg;</b>, median chunk span
+    45 frames. For comparison, the ACT baseline it is measured against predicts 700 numbers to
+    cover 100 frames.
+  </p>
+
+  <div class="note">
+    <h4>Two rough edges, reproduced on purpose</h4>
+    <p>
+      <b>The last waypoint of a padded chunk is garbage.</b> When a window runs past the end of the
+      knot vector the reference pads by repeating the final knot &mdash; so at exactly the span's
+      end every basis function has already closed and the curve evaluates to zero. Only the final
+      chunk of an episode is affected; the decoder drops that sample.
+    </p>
+    <p>
+      <b>The last few frames of each episode look backwards.</b> Once the chunks run out, the
+      final one keeps being reassigned with a growing shift, so its window starts <em>before</em>
+      the current frame. Roughly the last 5% of each episode; the decoder clamps to zero.
+    </p>
+    <p>
+      Both are upstream behaviour rather than porting mistakes, and both are pinned by tests so a
+      later refactor cannot quietly change them.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <p>
+    Method from <b>B-spline Policy: Accelerating Manipulation Policies via B-spline Action
+    Representations</b> (Han, Xiong, Chen, Liu, Torralba, Zhu, Du &mdash; arXiv:2607.09648).
+    Only the action representation is vendored; fitting, chunking and decoding run on numpy and
+    scipy alone, and training goes through LeRobot.
+  </p>
+  <p>
+    Every number and every curve on this page is computed from episode 58 of
+    <code>merged_act_finetune_20260528</code> by <code>bspline/build_walkthrough.py</code>.
+    Code and tests: <code>Yunfei/crisp_gym/bspline/</code>.
+  </p>
+</footer>
+
+</main>
+</div>
+</div>
+
+<script id="payload" type="application/json">/*__DATA__*/</script>
+<script>
+(() => {
+"use strict";
+const D = JSON.parse(document.getElementById("payload").textContent);
+const NS = "http://www.w3.org/2000/svg";
+const K = D.config.degree, NSTEP = D.config.n_steps, T = D.source.frames, FPS = D.source.fps;
+const DIMS = D.dims;                     // ["x","y","z","gripper"]
+const RAW = DIMS.map(l => D.raw[l]);
+const COEF = D.coef;          // all 10 policy dims
+const CDIM = [0, 1, 2, 9];   // which of them the plotted channels map to
+const KN = D.knots;
+
+/* ------------------------------------------------------------ svg helpers */
+// SVG presentation attributes do not resolve var(); those must be set as CSS.
+const el = (t, a = {}) => {
+  const n = document.createElementNS(NS, t);
+  for (const k in a){
+    const v = a[k];
+    if (v === undefined || v === null) continue;
+    if (typeof v === "string" && v.indexOf("var(") === 0) n.style.setProperty(k, v);
+    else n.setAttribute(k, v);
+  }
+  return n;
+};
+const txt = (s, a = {}) => { const n = el("text", a); n.textContent = s; return n; };
+const fmt = (v, d = 0) => v.toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d});
+
+function panel(svg, box){                          // box: {x,y,w,h,xd,yd}
+  const [x0, x1] = box.xd, [y0, y1] = box.yd;
+  const sx = v => box.x + (v - x0) / (x1 - x0) * box.w;
+  const sy = v => box.y + box.h - (v - y0) / (y1 - y0) * box.h;
+  return {sx, sy, box,
+    line(pts, cls){
+      let d = "";
+      for (let i = 0; i < pts.length; i++){
+        const p = pts[i];
+        if (p === null || !isFinite(p[1])) { d += ""; continue; }
+        d += (i === 0 || pts[i-1] === null || !isFinite(pts[i-1][1]) ? "M" : "L")
+           + sx(p[0]).toFixed(1) + " " + sy(p[1]).toFixed(1);
+      }
+      svg.appendChild(el("path", {d, class: cls}));
+    },
+    series(vals, cls, step = 1){
+      const pts = [];
+      for (let i = 0; i < vals.length; i += step) pts.push([i, vals[i]]);
+      this.line(pts, cls);
+    },
+    yaxis(ticks, label, dec = 2){
+      for (const v of ticks){
+        svg.appendChild(el("line", {x1: box.x, x2: box.x + box.w, y1: sy(v), y2: sy(v), class: "gridline"}));
+        svg.appendChild(txt(fmt(v, dec), {x: box.x - 7, y: sy(v) + 3.4, class: "tickt", "text-anchor": "end"}));
+      }
+      if (label) svg.appendChild(txt(label, {x: box.x - 7, y: box.y - 9, class: "axlab", "text-anchor": "end"}));
+    },
+    xaxis(ticks, label){
+      svg.appendChild(el("line", {x1: box.x, x2: box.x + box.w, y1: box.y + box.h, y2: box.y + box.h, class: "ax"}));
+      for (const v of ticks){
+        svg.appendChild(el("line", {x1: sx(v), x2: sx(v), y1: box.y + box.h, y2: box.y + box.h + 4, class: "ax"}));
+        svg.appendChild(txt(fmt(v), {x: sx(v), y: box.y + box.h + 16, class: "tickt", "text-anchor": "middle"}));
+      }
+      if (label) svg.appendChild(txt(label, {x: box.x + box.w, y: box.y + box.h + 30, class: "axlab", "text-anchor": "end"}));
+    }};
+}
+const ticksFor = (lo, hi, n = 5) => {
+  const out = [], step = (hi - lo) / (n - 1);
+  for (let i = 0; i < n; i++) out.push(lo + i * step);
+  return out;
+};
+const extent = a => { let lo = Infinity, hi = -Infinity;
+  for (const v of a) if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  const pad = (hi - lo) * 0.09 || 1; return [lo - pad, hi + pad]; };
+
+/* -------------------------------------------------------- b-spline (de boor) */
+function findSpan(t, k, x, n){
+  if (x >= t[n]) return n - 1;
+  if (x <= t[k]) return k;
+  let lo = k, hi = n, mid = (lo + hi) >> 1;
+  while (x < t[mid] || x >= t[mid + 1]){
+    if (x < t[mid]) hi = mid; else lo = mid;
+    mid = (lo + hi) >> 1;
+  }
+  return mid;
+}
+function evalSpline(t, c, k, x){
+  const n = c.length, s = findSpan(t, k, x, n), d = [];
+  for (let j = 0; j <= k; j++) d[j] = c[s - k + j];
+  for (let r = 1; r <= k; r++)
+    for (let j = k; j >= r; j--){
+      const den = t[s + 1 + j - r] - t[s + j - k];
+      const a = den === 0 ? 0 : (x - t[s + j - k]) / den;
+      d[j] = (1 - a) * d[j - 1] + a * d[j];
+    }
+  return d[k];
+}
+const padTo = (arr, n) => { const o = arr.slice(); while (o.length < n) o.push(o[o.length - 1]); return o; };
+
+/** The chunk serving `frame`: a window of the global knot vector plus the
+ *  same-indexed control points. Knots stay absolute here; the stored form
+ *  subtracts `frame` from column 0. */
+function chunkAt(frame){
+  const s = D.chunks.win_start[frame];
+  const knots = padTo(KN.slice(s, s + NSTEP), NSTEP);
+  const coef = COEF.map(c => padTo(c.slice(s, s + NSTEP - K - 1), NSTEP - K - 1));  // (10, NSTEP-K-1)
+  return {s, knots, coef, tMin: knots[K], tMax: knots[NSTEP - K - 1]};
+}
+function decodeChunk(ch, dim, n){
+  const out = [];
+  if (!(ch.tMax > ch.tMin)) return out;
+  for (let i = 0; i < n; i++){
+    const x = ch.tMin + (ch.tMax - ch.tMin) * i / (n - 1);
+    out.push([x, evalSpline(ch.knots, ch.coef[CDIM[dim]], K, x)]);
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------ 0. masthead */
+(() => {
+  const v = [
+    ["Episode", D.source.episode, ""],
+    ["Frames", fmt(T), "@ " + FPS + " Hz"],
+    ["Duration", (T / FPS).toFixed(1), "s"],
+    ["Knots fitted", fmt(KN.length), "for " + fmt(T) + " frames"],
+    ["Chunk", D.config.flat_dim, "numbers"],
+  ];
+  const dl = document.getElementById("vitals");
+  for (const [k, val, sub] of v){
+    const d = document.createElement("div"); d.className = "vital";
+    d.innerHTML = `<dt>${k}</dt><dd>${val}${sub ? `<span>${sub}</span>` : ""}</dd>`;
+    dl.appendChild(d);
+  }
+  document.getElementById("deg-pad").textContent = K;
+  document.getElementById("flat-dim").textContent = D.config.flat_dim;
+  document.getElementById("flat-dim-2").textContent = D.config.flat_dim;
+  document.getElementById("fit-summary").innerHTML =
+    `For this episode that is <b>${KN.length} knots covering ${T} frames</b> &mdash; ` +
+    `${D.fit.knots_per_frame.toFixed(2)} knots per frame, with the worst position error anywhere ` +
+    `in the episode at <b>${Math.max(...D.fit.resid_mm).toFixed(1)} mm</b>.`;
+})();
+
+/* ---------------------------------------------------------- 0. stage rail */
+(() => {
+  const ol = document.getElementById("rail");
+  document.querySelectorAll("main section").forEach(sec => {
+    const n = sec.querySelector(".stage .num").textContent;
+    const k = sec.querySelector(".stage .kicker").textContent;
+    const li = document.createElement("li");
+    li.innerHTML = `<a href="#${sec.id}"><span class="n">${n}</span>${k}</a>`;
+    ol.appendChild(li);
+  });
+  const links = [...ol.querySelectorAll("a")];
+  const secs = [...document.querySelectorAll("main section")];
+  const io = new IntersectionObserver(es => {
+    es.forEach(e => {
+      if (!e.isIntersecting) return;
+      const i = secs.indexOf(e.target);
+      links.forEach((a, j) => a.classList.toggle("on", i === j));
+    });
+  }, {rootMargin: "-15% 0px -70% 0px"});
+  secs.forEach(s => io.observe(s));
+})();
+
+/* ----------------------------------------------------- 1. the trajectory */
+(() => {
+  const svg = document.getElementById("fig-traj");
+  const W = 900, H = 300, L = 46, R = 14, TP = 16, GAP = 10;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const rows = [[0, "x"], [1, "y"], [2, "z"], [3, "gripper"]];
+  const rowH = (H - TP - 34 - GAP * 3) / 4;
+  rows.forEach(([d, lab], i) => {
+    const y = TP + i * (rowH + GAP);
+    const yd = d === 3 ? [-0.15, 1.15] : extent(RAW[d]);
+    const p = panel(svg, {x: L, y, w: W - L - R, h: rowH, xd: [0, T - 1], yd});
+    p.yaxis(d === 3 ? [0, 1] : ticksFor(yd[0] + (yd[1]-yd[0])*.12, yd[1] - (yd[1]-yd[0])*.12, 2), null, d === 3 ? 0 : 2);
+    p.series(RAW[d], "l-data");
+    svg.appendChild(txt(lab + (d < 3 ? " [m]" : ""), {x: L + 5, y: y + 11, class: "serieslab", fill: "var(--c-data)"}));
+    if (i === 3) p.xaxis(ticksFor(0, T - 1, 6).map(Math.round), "frame");
+  });
+  // gripper transitions, marked across every row
+  for (let i = 1; i < T; i++){
+    if (Math.abs(RAW[3][i] - RAW[3][i - 1]) > 0.5){
+      const x = L + i / (T - 1) * (W - L - R);
+      svg.insertBefore(el("line", {x1: x, x2: x, y1: TP, y2: H - 34, stroke: "var(--c-knot)",
+        "stroke-width": 1, "stroke-dasharray": "2 3", opacity: .55}), svg.firstChild);
+    }
+  }
+})();
+
+/* ------------------------------------------------------------- 2. the fit */
+(() => {
+  const svg = document.getElementById("fig-fit");
+  const W = 900, H = 320, L = 46, R = 14;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const dim = 2, yd = extent(RAW[dim]);
+  const main = panel(svg, {x: L, y: 16, w: W - L - R, h: 176, xd: [0, T - 1], yd});
+  main.yaxis(ticksFor(yd[0] + (yd[1]-yd[0])*.12, yd[1] - (yd[1]-yd[0])*.12, 3), "z [m]");
+  main.series(RAW[dim], "l-data");
+  const fit = [];
+  for (let x = 0; x <= T - 1; x += 0.5) fit.push([x, evalSpline(KN, COEF[CDIM[dim]], K, x)]);
+  main.line(fit, "l-spline");
+
+  // knot strip
+  const sy0 = 202, sh = 26;
+  svg.appendChild(txt("knots", {x: L - 7, y: sy0 + 16, class: "axlab", "text-anchor": "end"}));
+  svg.appendChild(el("line", {x1: L, x2: W - R, y1: sy0 + sh, y2: sy0 + sh, class: "ax"}));
+  for (const t of KN){
+    const x = main.sx(Math.max(0, Math.min(T - 1, t)));
+    svg.appendChild(el("line", {x1: x, x2: x, y1: sy0 + 4, y2: sy0 + sh, class: "knot-tick", opacity: .75}));
+  }
+
+  // residual strip
+  const rd = [0, Math.max(12, Math.max(...D.fit.resid_mm) * 1.25)];
+  const res = panel(svg, {x: L, y: 250, w: W - L - R, h: 40, xd: [0, T - 1], yd: rd});
+  res.yaxis([0, rd[1]], "fit error [mm]", 1);
+  res.series(D.fit.resid_mm, "l-warn");
+  res.xaxis(ticksFor(0, T - 1, 6).map(Math.round), "frame");
+})();
+
+/* ---------------------------------------------------------- 3. the window */
+(() => {
+  const svg = document.getElementById("fig-window");
+  const W = 900, H = 168, L = 46, R = 14;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const s0 = Math.floor(KN.length * 0.42);
+  const p = panel(svg, {x: L, y: 20, w: W - L - R, h: 1, xd: [0, KN.length - 1], yd: [0, 1]});
+
+  svg.appendChild(txt("knot index →", {x: L, y: 14, class: "axlab"}));
+  // all knots as index ticks
+  for (let i = 0; i < KN.length; i++){
+    const x = p.sx(i), inWin = i >= s0 && i < s0 + NSTEP;
+    const interior = i >= s0 + K && i <= s0 + NSTEP - K - 1;
+    svg.appendChild(el("line", {x1: x, x2: x, y1: 24, y2: 24 + (inWin ? 30 : 18),
+      class: "knot-tick" + (inWin ? " hi" : ""), opacity: inWin ? (interior ? 1 : .5) : .28}));
+  }
+  // window bracket
+  const wx0 = p.sx(s0), wx1 = p.sx(s0 + NSTEP - 1);
+  const ix0 = p.sx(s0 + K), ix1 = p.sx(s0 + NSTEP - K - 1);
+  svg.appendChild(el("rect", {x: wx0, y: 20, width: wx1 - wx0, height: 40, class: "band-chunk"}));
+  svg.appendChild(el("rect", {x: ix0, y: 20, width: ix1 - ix0, height: 40, class: "band"}));
+  svg.appendChild(txt(`one window — ${NSTEP} knots`, {x: (wx0 + wx1) / 2, y: 74,
+    class: "serieslab", fill: "var(--c-chunk)", "text-anchor": "middle"}));
+  svg.appendChild(txt("valid span (what gets executed)", {x: (ix0 + ix1) / 2, y: 88,
+    class: "tickt", "text-anchor": "middle"}));
+
+  // the same window in time
+  const ty = 112;
+  svg.appendChild(txt("in frames →", {x: L, y: ty - 6, class: "axlab"}));
+  const tp = panel(svg, {x: L, y: ty, w: W - L - R, h: 1, xd: [0, T - 1], yd: [0, 1]});
+  svg.appendChild(el("line", {x1: L, x2: W - R, y1: ty + 20, y2: ty + 20, class: "ax"}));
+  for (const t of KN){
+    const x = tp.sx(Math.max(0, Math.min(T - 1, t)));
+    svg.appendChild(el("line", {x1: x, x2: x, y1: ty + 8, y2: ty + 20, class: "knot-tick", opacity: .3}));
+  }
+  const a = tp.sx(Math.max(0, KN[s0 + K])), b = tp.sx(Math.min(T - 1, KN[s0 + NSTEP - K - 1]));
+  svg.appendChild(el("rect", {x: a, y: ty + 4, width: Math.max(b - a, 2), height: 20, class: "band"}));
+  svg.appendChild(txt(`${(KN[s0 + NSTEP - K - 1] - KN[s0 + K]).toFixed(0)} frames`,
+    {x: (a + b) / 2, y: ty + 40, class: "serieslab", fill: "var(--accent)", "text-anchor": "middle"}));
+  for (const v of ticksFor(0, T - 1, 6).map(Math.round))
+    svg.appendChild(txt(fmt(v), {x: tp.sx(v), y: ty + 40, class: "tickt", "text-anchor": "middle"}));
+})();
+
+/* ---------------------------------------------------- 4. explorer + matrix */
+let curFrame = Math.round(T * 0.35), curDim = 2;
+const scrub = document.getElementById("scrub");
+scrub.max = String(T - 1); scrub.value = String(curFrame);
+
+function drawExplorer(){
+  const svg = document.getElementById("fig-explore");
+  svg.textContent = "";
+  const W = 900, H = 300, L = 46, R = 14;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const ch = chunkAt(curFrame);
+  const yd = curDim === 3 ? [-0.15, 1.15] : extent(RAW[curDim]);
+  const p = panel(svg, {x: L, y: 18, w: W - L - R, h: 210, xd: [0, T - 1], yd});
+  p.yaxis(curDim === 3 ? [0, 1] : ticksFor(yd[0] + (yd[1]-yd[0])*.12, yd[1] - (yd[1]-yd[0])*.12, 3),
+          DIMS[curDim] + (curDim < 3 ? " [m]" : ""), curDim === 3 ? 0 : 3);
+
+  // the chunk's valid span, shaded
+  const a = p.sx(Math.max(0, ch.tMin)), b = p.sx(Math.min(T - 1, ch.tMax));
+  svg.appendChild(el("rect", {x: a, y: 18, width: Math.max(b - a, 2), height: 210, class: "band"}));
+  p.series(RAW[curDim], "l-data");
+
+  // this chunk's knots
+  for (const t of ch.knots){
+    if (t < 0 || t > T - 1) continue;
+    const x = p.sx(t);
+    svg.appendChild(el("line", {x1: x, x2: x, y1: 228, y2: 240, class: "knot-tick"}));
+  }
+  // the curve the chunk encodes, and its decoded waypoints
+  const curve = decodeChunk(ch, curDim, 120);
+  if (curve.length) p.line(curve, "l-chunk");
+  const wps = decodeChunk(ch, curDim, 16);
+  for (const [x, y] of wps)
+    svg.appendChild(el("circle", {cx: p.sx(x), cy: p.sy(y), r: 3, class: "wp"}));
+
+  // "now"
+  const nx = p.sx(curFrame);
+  svg.appendChild(el("line", {x1: nx, x2: nx, y1: 18, y2: 240, class: "nowline"}));
+  svg.appendChild(txt("now", {x: nx + 5, y: 30, class: "serieslab", fill: "var(--ink)"}));
+  p.xaxis(ticksFor(0, T - 1, 6).map(Math.round), "frame");
+
+  const span = ch.tMax - ch.tMin;
+  document.getElementById("scrub-out").innerHTML =
+    `frame <b>${curFrame}</b> &nbsp;&middot;&nbsp; ${(curFrame / FPS).toFixed(1)} s`;
+  document.getElementById("explore-cap").innerHTML =
+    `The shaded span is what this chunk covers: <b>${span.toFixed(1)} frames</b>, ` +
+    `<b>${(span / FPS).toFixed(2)} s</b> of trajectory, from ${D.config.flat_dim} numbers. ` +
+    `Its window starts at knot index ${ch.s}. Drag toward a grasp and watch the span collapse ` +
+    `as the knots crowd in — the same ${NSTEP} knots simply buy less time there.`;
+}
+
+function drawMatrix(){
+  const svg = document.getElementById("fig-matrix");
+  svg.textContent = "";
+  const ch = chunkAt(curFrame);
+  const cols = 11, cw = 30, chh = 12, L = 58, TP = 46;
+  const W = L + cols * cw + 16, H = TP + NSTEP * chh + 26;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.style.minWidth = "340px";
+
+  // column 0 is knots (relative to now); columns 1.. are control points
+  const knotRel = ch.knots.map(t => t - curFrame);
+  const kLo = Math.min(...knotRel), kHi = Math.max(...knotRel);
+  const full = [];   // (NSTEP, 11): knot column then the ten control dimensions
+  for (let r = 0; r < NSTEP; r++){
+    const row = [knotRel[r]];
+    for (let c = 0; c < 10; c++) row.push(ch.coef[c][Math.min(r, ch.coef[c].length - 1)]);
+    full.push(row);
+  }
+  const colExtent = c => { let lo = Infinity, hi = -Infinity;
+    for (const r of full) if (isFinite(r[c])) { lo = Math.min(lo, r[c]); hi = Math.max(hi, r[c]); }
+    return [lo, hi === lo ? lo + 1 : hi]; };
+
+  const heads = ["knot", "x", "y", "z", "r0", "r1", "r2", "r3", "r4", "r5", "grip"];
+  heads.forEach((h, c) => {
+    svg.appendChild(txt(h, {x: L + c * cw + cw / 2, y: TP - 22,
+      class: "tickt", "text-anchor": "middle",
+      fill: c === 0 ? "var(--c-knot)" : "var(--muted)"}));
+    svg.appendChild(txt(c, {x: L + c * cw + cw / 2, y: TP - 9,
+      class: "tickt", "text-anchor": "middle", opacity: .5}));
+  });
+  for (let c = 0; c < cols; c++){
+    const [lo, hi] = colExtent(c);
+    for (let r = 0; r < NSTEP; r++){
+      const v = full[r][c];
+      const known = isFinite(v);
+      const t = known ? (v - lo) / (hi - lo) : 0;
+      svg.appendChild(el("rect", {
+        x: L + c * cw + 1, y: TP + r * chh + 1, width: cw - 2, height: chh - 2, rx: 1,
+        fill: c === 0 ? "var(--c-knot)" : "var(--c-chunk)",
+        opacity: known ? (0.12 + 0.78 * t) : 0.06
+      }));
+    }
+  }
+  for (let r = 0; r < NSTEP; r++){
+    const interior = r >= K && r <= NSTEP - K - 1;
+    svg.appendChild(txt(r, {x: L - 22, y: TP + r * chh + 9, class: "tickt", "text-anchor": "end",
+      opacity: interior ? .85 : .4}));
+    svg.appendChild(txt(knotRel[r].toFixed(0), {x: L - 5, y: TP + r * chh + 9,
+      class: "tickt", "text-anchor": "end", fill: "var(--c-knot)", opacity: interior ? .95 : .45}));
+  }
+  svg.appendChild(txt("row", {x: L - 22, y: TP - 9, class: "tickt", "text-anchor": "end", opacity: .5}));
+  svg.appendChild(txt(`${NSTEP} × ${cols} = ${D.config.flat_dim} numbers`,
+    {x: L, y: H - 8, class: "axlab"}));
+  svg.appendChild(txt("shaded by value, per column", {x: W - 8, y: H - 8,
+    class: "tickt", "text-anchor": "end", opacity: .6}));
+}
+
+function redraw(){ drawExplorer(); drawMatrix(); }
+scrub.addEventListener("input", e => { curFrame = +e.target.value; redraw(); });
+document.querySelectorAll(".segbtns button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".segbtns button").forEach(o => o.setAttribute("aria-pressed", "false"));
+    b.setAttribute("aria-pressed", "true");
+    curDim = +b.dataset.dim; redraw();
+  });
+});
+redraw();
+
+/* ------------------------------------------------------- 5. the assignment */
+(() => {
+  const svg = document.getElementById("fig-assign");
+  const W = 900, H = 210, L = 46, R = 14;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const spans = D.chunks.spans;
+  const yd = [0, Math.max(...spans) * 1.1];
+  const p = panel(svg, {x: L, y: 16, w: W - L - R, h: 150, xd: [0, T - 1], yd});
+  p.yaxis(ticksFor(0, yd[1], 4), "chunk span [frames]", 0);
+  for (let i = 0; i < T; i++){
+    const x = p.sx(i);
+    svg.appendChild(el("line", {x1: x, x2: x, y1: p.sy(0), y2: p.sy(spans[i]),
+      stroke: "var(--c-chunk)", "stroke-width": 1.3, opacity: .55}));
+  }
+  for (let i = 1; i < T; i++)
+    if (Math.abs(RAW[3][i] - RAW[3][i - 1]) > 0.5){
+      const x = p.sx(i);
+      svg.appendChild(el("line", {x1: x, x2: x, y1: 16, y2: 166, stroke: "var(--c-knot)",
+        "stroke-width": 1, "stroke-dasharray": "2 3", opacity: .7}));
+    }
+  p.xaxis(ticksFor(0, T - 1, 6).map(Math.round), "frame");
+  svg.appendChild(txt("dashed — gripper toggles", {x: W - R, y: 30,
+    class: "tickt", "text-anchor": "end", fill: "var(--c-knot)"}));
+})();
+
+/* ------------------------------------------------------------ 6. the error */
+(() => {
+  const svg = document.getElementById("fig-error");
+  const W = 900, H = 190, L = 46, R = 14;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const e = D.error.pos_mm.map(v => (v === null ? NaN : v));
+  const fin = e.filter(isFinite);
+  const yd = [0, Math.max(...fin) * 1.15];
+  const p = panel(svg, {x: L, y: 16, w: W - L - R, h: 130, xd: [0, T - 1], yd});
+  p.yaxis(ticksFor(0, yd[1], 4), "decode error [mm]", 1);
+  p.series(e, "l-warn");
+  p.xaxis(ticksFor(0, T - 1, 6).map(Math.round), "frame");
+  const med = fin.slice().sort((a, b) => a - b)[Math.floor(fin.length / 2)];
+  document.getElementById("error-cap").innerHTML =
+    `Worst position error across every waypoint of every chunk in the episode, against the ` +
+    `recording. Median <b>${med.toFixed(1)} mm</b>, peak <b>${Math.max(...fin).toFixed(1)} mm</b>. ` +
+    `The gap at the right is where chunks run past the end of the episode and there is nothing ` +
+    `left to compare against.`;
+})();
+
+/* ------------------------------------------------------------ 7. the sweep */
+(() => {
+  const tb = document.getElementById("sweep-body");
+  for (const r of D.sweep){
+    const tr = document.createElement("tr");
+    if (Math.abs(r.max_error - D.config.max_error) < 1e-9) tr.className = "pick";
+    tr.innerHTML =
+      `<td>${r.max_error}</td><td>${r.knots_per_frame.toFixed(2)}</td>` +
+      `<td>${r.pos_mm.toFixed(1)} mm</td>` +
+      `<td>${r.span.toFixed(0)} fr &middot; ${(r.span / FPS).toFixed(1)} s</td>`;
+    tb.appendChild(tr);
+  }
+})();
+})();
+</script>

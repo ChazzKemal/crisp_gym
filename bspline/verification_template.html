@@ -1,0 +1,595 @@
+<title>The Windowing Theorem</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400;1,500&display=swap">
+
+<style>
+:root{
+  --paper:#EFF2F1; --surface:#FCFDFC; --surface-2:#F5F8F7;
+  --ink:#141918; --ink-2:#3B4544; --muted:#69736F; --rule:#D3DAD7; --rule-2:#E4E9E7;
+  --accent:#146B66; --accent-soft:#146B661a;
+  --ok:#1F6B43; --ok-soft:#1f6b431a; --bad:#9C3626; --bad-soft:#9c36261a;
+  --c-knot:#B25A12; --c-chunk:#6A3C8C;
+  --shadow:0 1px 2px #14191807, 0 6px 18px #1419180a;
+  --sans:"IBM Plex Sans Condensed", ui-sans-serif, system-ui, sans-serif;
+  --serif:"IBM Plex Serif", Georgia, "Times New Roman", serif;
+  --mono:"IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --measure:66ch; --wide:1080px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0D1112; --surface:#141A1B; --surface-2:#182022;
+    --ink:#DEE6E4; --ink-2:#B7C2BF; --muted:#8A9793; --rule:#26302F; --rule-2:#1D2627;
+    --accent:#54B3AC; --accent-soft:#54b3ac1f;
+    --ok:#63C08C; --ok-soft:#63c08c1f; --bad:#D2705C; --bad-soft:#d2705c1f;
+    --c-knot:#DE8B3F; --c-chunk:#AE86D6;
+    --shadow:0 1px 2px #00000040, 0 8px 24px #00000038;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0D1112; --surface:#141A1B; --surface-2:#182022;
+  --ink:#DEE6E4; --ink-2:#B7C2BF; --muted:#8A9793; --rule:#26302F; --rule-2:#1D2627;
+  --accent:#54B3AC; --accent-soft:#54b3ac1f;
+  --ok:#63C08C; --ok-soft:#63c08c1f; --bad:#D2705C; --bad-soft:#d2705c1f;
+  --c-knot:#DE8B3F; --c-chunk:#AE86D6;
+  --shadow:0 1px 2px #00000040, 0 8px 24px #00000038;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--serif); font-size:17px; line-height:1.62;
+}
+.wrap{max-width:var(--wide); margin:0 auto; padding:0 24px 96px}
+
+header.mast{padding:64px 0 36px; border-bottom:1px solid var(--rule)}
+.eyebrow{
+  font-family:var(--mono); font-size:11.5px; font-weight:500;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--muted);
+}
+h1{
+  font-family:var(--sans); font-weight:700; font-size:clamp(40px,7vw,72px);
+  line-height:.98; letter-spacing:-.02em; margin:14px 0 0; text-wrap:balance;
+}
+h1 em{font-style:normal; color:var(--accent)}
+.standfirst{max-width:var(--measure); margin:20px 0 0; font-size:19px; color:var(--ink-2)}
+.scoreline{
+  display:flex; flex-wrap:wrap; align-items:center; gap:14px 26px; margin-top:30px;
+  padding:16px 20px; border:1px solid var(--rule); border-radius:5px;
+  background:var(--surface); box-shadow:var(--shadow);
+}
+.score{
+  font-family:var(--sans); font-weight:700; font-size:34px; letter-spacing:-.015em;
+  color:var(--ok); font-variant-numeric:tabular-nums; line-height:1;
+}
+.score span{font-size:15px; font-weight:500; color:var(--muted); margin-left:6px}
+.scoreline p{margin:0; font-size:15px; color:var(--ink-2); max-width:52ch}
+
+.body{display:grid; grid-template-columns:1fr; gap:0}
+nav.rail{display:none}
+@media (min-width:1180px){
+  .body{grid-template-columns:150px minmax(0,1fr); gap:44px; align-items:start}
+  nav.rail{display:block; position:sticky; top:28px; padding-top:52px}
+}
+nav.rail ol{list-style:none; margin:0; padding:0; border-left:1px solid var(--rule)}
+nav.rail a{
+  display:block; padding:7px 0 7px 14px; margin-left:-1px; border-left:2px solid transparent;
+  font-family:var(--mono); font-size:11.5px; color:var(--muted); text-decoration:none; line-height:1.35;
+}
+nav.rail a:hover{color:var(--ink)}
+nav.rail a.on{color:var(--accent); border-left-color:var(--accent)}
+nav.rail a .n{opacity:.6; margin-right:7px}
+
+main{min-width:0}
+section{padding:52px 0; border-bottom:1px solid var(--rule-2)}
+section:last-of-type{border-bottom:0}
+.stage{display:flex; align-items:baseline; gap:14px; margin-bottom:6px}
+.stage .num{font-family:var(--mono); font-size:12px; font-weight:600; color:var(--accent); letter-spacing:.08em}
+.stage .kicker{
+  font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--muted);
+}
+h2{
+  font-family:var(--sans); font-weight:600; font-size:clamp(26px,3.2vw,36px);
+  line-height:1.1; letter-spacing:-.015em; margin:0 0 16px; text-wrap:balance; max-width:24ch;
+}
+h3{font-family:var(--sans); font-weight:600; font-size:17px; margin:28px 0 8px}
+p{max-width:var(--measure); margin:0 0 16px}
+p.lede{font-size:19px; color:var(--ink-2)}
+ul{max-width:var(--measure); padding-left:20px; margin:0 0 16px}
+li{margin-bottom:6px}
+code{
+  font-family:var(--mono); font-size:.87em; background:var(--surface-2);
+  border:1px solid var(--rule-2); border-radius:3px; padding:.1em .34em;
+}
+a{color:var(--accent); text-underline-offset:2px}
+
+/* --- maths --- */
+.m{font-family:var(--serif); font-style:italic}
+.m sub, .m sup{font-style:normal; font-size:.72em; font-family:var(--mono)}
+.eq{
+  max-width:var(--measure); margin:18px 0; padding:14px 18px;
+  background:var(--surface); border:1px solid var(--rule-2); border-left:2px solid var(--accent);
+  border-radius:0 4px 4px 0; font-family:var(--serif); font-size:16.5px; line-height:1.9;
+  overflow-x:auto;
+}
+.eq .lbl{
+  display:block; font-family:var(--mono); font-size:10.5px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--muted); margin-bottom:6px;
+}
+.derivation{
+  max-width:var(--measure); margin:16px 0; padding-left:16px;
+  border-left:1px solid var(--rule); color:var(--ink-2); font-size:16px;
+}
+.derivation p{margin:0 0 10px}
+.derivation p:last-child{margin:0}
+.qed{color:var(--accent); font-weight:600}
+
+/* --- evidence --- */
+.evidence{margin:24px 0 8px}
+.check{
+  border:1px solid var(--rule); border-radius:5px; background:var(--surface);
+  box-shadow:var(--shadow); padding:15px 17px; margin-bottom:12px;
+}
+.check-head{display:flex; align-items:flex-start; gap:12px}
+.badge{
+  flex:0 0 auto; font-family:var(--mono); font-size:10px; font-weight:600;
+  letter-spacing:.1em; padding:3px 8px; border-radius:3px; margin-top:2px;
+  color:var(--ok); background:var(--ok-soft); border:1px solid var(--ok);
+}
+.badge.fail{color:var(--bad); background:var(--bad-soft); border-color:var(--bad)}
+.check-claim{font-size:16px; line-height:1.5; margin:0}
+.check-meta{
+  display:flex; flex-wrap:wrap; gap:6px 22px; margin:11px 0 0; padding-top:11px;
+  border-top:1px solid var(--rule-2);
+  font-family:var(--mono); font-size:12px; color:var(--muted);
+  font-variant-numeric:tabular-nums;
+}
+.check-meta b{color:var(--ink); font-weight:600}
+.check-meta .val{color:var(--ok)}
+.check-meta .val.fail{color:var(--bad)}
+.check-note{
+  margin:9px 0 0; font-size:14px; color:var(--muted); line-height:1.5; max-width:var(--measure);
+}
+.ref{
+  display:block; margin-top:4px; font-family:var(--mono); font-size:11.5px; color:var(--muted);
+}
+.ref b{color:var(--ink-2); font-weight:500}
+
+.note{
+  max-width:var(--measure); margin:22px 0; padding:16px 18px;
+  border-left:2px solid var(--c-knot); background:var(--surface); border-radius:0 4px 4px 0;
+}
+.note h4{
+  font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--c-knot); margin:0 0 8px; font-weight:600;
+}
+.note p{margin:0 0 10px; font-size:15.5px}
+.note p:last-child{margin:0}
+
+footer{padding:44px 0 0; border-top:1px solid var(--rule); margin-top:16px; font-size:14.5px; color:var(--muted)}
+footer p{max-width:var(--measure)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <div class="eyebrow">crisp_gym &middot; b-spline pipeline &middot; verification</div>
+  <h1>The Windowing<br><em>Theorem</em></h1>
+  <p class="standfirst">
+    The claim the whole action representation rests on is that a slice of a spline is still that
+    spline. This is the audit: each mathematical claim stated, derived, and then checked against
+    something that shares no code with the thing being tested.
+  </p>
+  <div class="scoreline">
+    <div class="score" id="score">&mdash;<span id="score-sub"></span></div>
+    <p id="score-text"></p>
+  </div>
+</header>
+
+<div class="body">
+<nav class="rail" aria-label="Sections"><ol id="rail"></ol></nav>
+<main>
+
+<section id="how">
+  <div class="stage"><span class="num">00</span><span class="kicker">Method</span></div>
+  <h2>What counts as verification here</h2>
+  <p class="lede">
+    A test that checks an implementation against itself proves nothing. Every claim below is
+    measured against an independent reference.
+  </p>
+  <ul>
+    <li><b>A Cox&ndash;de Boor recursion written from the definition</b> &mdash; nine lines,
+      no library, used to confirm the basis functions really are non-negative, locally supported,
+      and a partition of unity on the knot vectors we actually build.</li>
+    <li><b>scipy</b> &mdash; <code>interpolate.BSpline</code> for evaluation,
+      <code>spatial.transform.Rotation</code> for the rotation algebra.</li>
+    <li><b>node</b> &mdash; the walkthrough page's own JavaScript decoder, extracted from its
+      source and run against scipy's answers, so the explainer and the pipeline cannot drift.</li>
+    <li><b>Real recorded data</b> &mdash; not synthetic fixtures. Splines fitted to the shortest
+      twelve episodes of <code>merged_act_finetune_20260528</code>.</li>
+  </ul>
+  <p>
+    Thresholds are stated per check. Where a claim is exact &mdash; a counting identity, an
+    encoding round trip &mdash; the threshold is literally zero rather than a small epsilon.
+  </p>
+</section>
+
+<section id="fundamentals" data-group="A.">
+  <div class="stage"><span class="num">01</span><span class="kicker">Fundamentals</span></div>
+  <h2>Do our objects satisfy the axioms?</h2>
+  <p class="lede">
+    Before trusting anything built on top, confirm that what <code>generate_knots</code> and
+    <code>make_lsq_spline</code> hand back is a well-formed B-spline.
+  </p>
+  <div class="eq">
+    <span class="lbl">Cox&ndash;de Boor recursion</span>
+    <span class="m">B<sub>i,0</sub></span>(<span class="m">x</span>) = 1 if
+    <span class="m">t<sub>i</sub></span> &le; <span class="m">x</span> &lt;
+    <span class="m">t<sub>i+1</sub></span>, else 0<br>
+    <span class="m">B<sub>i,k</sub></span>(<span class="m">x</span>) =
+    <span style="white-space:nowrap">(<span class="m">x</span>&minus;<span class="m">t<sub>i</sub></span>) / (<span class="m">t<sub>i+k</sub></span>&minus;<span class="m">t<sub>i</sub></span>)</span>
+    &middot; <span class="m">B<sub>i,k&minus;1</sub></span>(<span class="m">x</span>)
+    &nbsp;+&nbsp;
+    <span style="white-space:nowrap">(<span class="m">t<sub>i+k+1</sub></span>&minus;<span class="m">x</span>) / (<span class="m">t<sub>i+k+1</sub></span>&minus;<span class="m">t<sub>i+1</sub></span>)</span>
+    &middot; <span class="m">B<sub>i+1,k&minus;1</sub></span>(<span class="m">x</span>)
+  </div>
+  <p>
+    Three properties follow from it and are worth confirming on our own knot vectors, because a
+    degenerate fit (repeated knots, an empty span) can quietly break them: the basis is
+    non-negative, each <span class="m">B<sub>i,k</sub></span> is zero outside
+    <span class="m">[t<sub>i</sub>, t<sub>i+k+1</sub>)</span>, and the basis sums to one across
+    the domain. The support property is the one everything else depends on.
+  </p>
+  <div class="evidence"></div>
+</section>
+
+<section id="windowing" data-group="B.">
+  <div class="stage"><span class="num">02</span><span class="kicker">The central claim</span></div>
+  <h2>A window of a spline is that spline</h2>
+  <p class="lede">
+    Chunking takes <span class="m">M</span> = <span class="m">chunk</span> + 2<span class="m">k</span>
+    consecutive knots and the control points carrying the <em>same indices</em>. The claim is that
+    this reproduces the global curve exactly &mdash; no refit, no approximation.
+  </p>
+  <div class="eq">
+    <span class="lbl">Statement</span>
+    Let <span class="m">S</span>(<span class="m">x</span>) = &Sigma;<span class="m"><sub>i</sub></span>
+    <span class="m">c<sub>i</sub></span> <span class="m">B<sub>i,k</sub><sup>t</sup></span>(<span class="m">x</span>),
+    and set <span class="m">t&prime;</span> = <span class="m">t</span>[<span class="m">s</span> : <span class="m">s</span>+<span class="m">M</span>],
+    <span class="m">c&prime;</span> = <span class="m">c</span>[<span class="m">s</span> : <span class="m">s</span>+<span class="m">M</span>&minus;<span class="m">k</span>&minus;1].<br>
+    Then <span class="m">S&prime;</span>(<span class="m">x</span>) = <span class="m">S</span>(<span class="m">x</span>)
+    for every <span class="m">x</span> &isin;
+    [<span class="m">t</span><sub>s+k</sub>, <span class="m">t</span><sub>s+M&minus;k&minus;1</sub>).
+  </div>
+  <div class="derivation">
+    <p>
+      <b>Why.</b> <span class="m">B<sub>j,k</sub><sup>t&prime;</sup></span> depends only on the
+      knots <span class="m">t&prime;</span>[<span class="m">j</span> &hellip; <span class="m">j</span>+<span class="m">k</span>+1],
+      which are exactly <span class="m">t</span>[<span class="m">s</span>+<span class="m">j</span> &hellip; <span class="m">s</span>+<span class="m">j</span>+<span class="m">k</span>+1].
+      So the windowed basis is the global basis re-indexed:
+      <span class="m">B<sub>j,k</sub><sup>t&prime;</sup></span> = <span class="m">B</span><sub>s+j,k</sub><sup class="m">t</sup>.
+    </p>
+    <p>
+      For <span class="m">x</span> in the span [<span class="m">t<sub>m</sub></span>, <span class="m">t<sub>m+1</sub></span>),
+      only the <span class="m">k</span>+1 basis functions with indices
+      <span class="m">m</span>&minus;<span class="m">k</span> &hellip; <span class="m">m</span> are non-zero.
+      The left end of the window gives <span class="m">x</span> &ge; <span class="m">t</span><sub>s+k</sub>
+      &rArr; <span class="m">m</span> &ge; <span class="m">s</span>+<span class="m">k</span>
+      &rArr; <span class="m">m</span>&minus;<span class="m">k</span> &ge; <span class="m">s</span>.
+      The right end gives <span class="m">x</span> &lt; <span class="m">t</span><sub>s+M&minus;k&minus;1</sub>
+      &rArr; <span class="m">m</span> &le; <span class="m">s</span>+<span class="m">M</span>&minus;<span class="m">k</span>&minus;2.
+    </p>
+    <p>
+      Every active index therefore lies in [<span class="m">s</span>, <span class="m">s</span>+<span class="m">M</span>&minus;<span class="m">k</span>&minus;2],
+      and all of those coefficients are present in <span class="m">c&prime;</span>. The two sums have
+      identical terms. <span class="qed">&#9633;</span>
+    </p>
+  </div>
+  <p>
+    This is also where the odd-looking slice in the decoder comes from. A knot vector of length
+    <span class="m">M</span> at degree <span class="m">k</span> admits exactly
+    <span class="m">M</span>&minus;<span class="m">k</span>&minus;1 control points, and
+    <code>params[:-(degree+1)]</code> takes precisely that many &mdash; 22 rows of our 26.
+  </p>
+  <div class="evidence"></div>
+</section>
+
+<section id="translation" data-group="C.">
+  <div class="stage"><span class="num">03</span><span class="kicker">Time origin</span></div>
+  <h2>Why subtracting the frame index is free</h2>
+  <p class="lede">
+    Every stored chunk has its current frame subtracted from the knot column, so knots read as
+    time-from-now. That has to leave the curve itself untouched.
+  </p>
+  <div class="derivation">
+    <p>
+      <b>Why.</b> By induction on <span class="m">k</span>. At <span class="m">k</span> = 0 the
+      condition <span class="m">t<sub>i</sub></span>&minus;<span class="m">c</span> &le;
+      <span class="m">x</span>&minus;<span class="m">c</span> &lt;
+      <span class="m">t<sub>i+1</sub></span>&minus;<span class="m">c</span> is the same inequality
+      as before the shift. For the step, every coefficient in the recursion is a ratio of
+      <em>differences</em> &mdash;
+      (<span class="m">x</span>&minus;<span class="m">t<sub>i</sub></span>) /
+      (<span class="m">t<sub>i+k</sub></span>&minus;<span class="m">t<sub>i</sub></span>) &mdash;
+      and a common <span class="m">c</span> cancels from numerator and denominator alike.
+      So <span class="m">B<sub>i,k</sub><sup>t&minus;c</sup></span>(<span class="m">x</span>&minus;<span class="m">c</span>)
+      = <span class="m">B<sub>i,k</sub><sup>t</sup></span>(<span class="m">x</span>).
+      <span class="qed">&#9633;</span>
+    </p>
+  </div>
+  <p>
+    Checked at shifts of 0, 1, 7, &minus;13 and 137.5 frames &mdash; including a shift larger than
+    the whole chunk and a fractional one, since nothing in the argument requires an integer.
+  </p>
+  <div class="evidence"></div>
+</section>
+
+<section id="relknots" data-group="D.">
+  <div class="stage"><span class="num">04</span><span class="kicker">Encoding</span></div>
+  <h2>The relative-knot form is a bijection</h2>
+  <p class="lede">
+    The optional encoding replaces the knot column with its first valid entry followed by adjacent
+    differences. If it is to be an alternative representation rather than a lossy one, it has to
+    invert exactly.
+  </p>
+  <div class="eq">
+    <span class="lbl">Encode / decode</span>
+    encode: <span class="m">e</span><sub>0</sub> = <span class="m">t<sub>k</sub></span>,
+    &nbsp; <span class="m">e<sub>i</sub></span> = <span class="m">t<sub>i</sub></span> &minus; <span class="m">t</span><sub>i&minus;1</sub> for <span class="m">i</span> &ge; 1<br>
+    decode: <span class="m">t<sub>k</sub></span> = <span class="m">e</span><sub>0</sub>,
+    then walk down with <span class="m">t<sub>i</sub></span> = <span class="m">t</span><sub>i+1</sub> &minus; <span class="m">e</span><sub>i+1</sub>
+    and up with <span class="m">t<sub>i</sub></span> = <span class="m">t</span><sub>i&minus;1</sub> + <span class="m">e<sub>i</sub></span>
+  </div>
+  <p>
+    Decoding recovers <span class="m">t<sub>k</sub></span> directly, then every other knot by
+    telescoping the differences from it in both directions &mdash; so the map is injective and its
+    inverse is the one implemented. Worth keeping honest because this encoding is the natural fix
+    for the knot column's fragility: it turns "the knots must come out ordered" into "the
+    predicted differences must come out non-negative".
+  </p>
+  <div class="evidence"></div>
+</section>
+
+<section id="evaluators" data-group="E.">
+  <div class="stage"><span class="num">05</span><span class="kicker">Evaluators</span></div>
+  <h2>Four implementations, one answer</h2>
+  <p class="lede">
+    The same spline gets evaluated by scipy during conversion, by de Boor's algorithm in the
+    browser, and &mdash; here &mdash; by a direct sum over basis functions. All three must agree
+    to floating-point precision, or one of them is lying.
+  </p>
+  <p>
+    The JavaScript case matters most. The walkthrough page reimplements
+    <code>findSpan</code> and <code>evalSpline</code> so it can decode chunks live rather than ship
+    pre-rendered images. Those functions are extracted from the page's own source, run under node
+    against scipy's answers on real chunks, and compared. If someone edits the page's maths, this
+    check fails.
+  </p>
+  <div class="evidence"></div>
+</section>
+
+<section id="padded" data-group="F.">
+  <div class="stage"><span class="num">06</span><span class="kicker">The degeneracy</span></div>
+  <h2>Where the last waypoint goes</h2>
+  <p class="lede">
+    A chunk running past the end of the knot vector is padded by repeating the final knot. The
+    last decoded waypoint of such a chunk collapses to the origin &mdash; and there is a precise
+    reason, not a numerical accident.
+  </p>
+  <p>
+    Basis functions have <em>half-open</em> support: <span class="m">B<sub>i,k</sub></span> is
+    supported on [<span class="m">t<sub>i</sub></span>, <span class="m">t<sub>i+k+1</sub></span>),
+    closed on the left and open on the right. When the tail is padded, every knot from
+    <span class="m">t</span><sub>M&minus;k&minus;1</sub> onward equals
+    <span class="m">t</span><sub>max</sub>, so at exactly <span class="m">x</span> =
+    <span class="m">t</span><sub>max</sub> every remaining basis function has already closed.
+  </p>
+  <p>
+    The sharp way to say it: <b>partition of unity fails at that one point</b>. The basis sums to
+    0 there instead of 1, so the curve evaluates to 0 regardless of the control points. On an
+    interior chunk the same point is perfectly well behaved, because its
+    <span class="m">t</span><sub>max</sub> is strictly below the next knot. The decoder drops the
+    final sample of a padded chunk; it only ever occurs at the end of an episode.
+  </p>
+  <div class="evidence"></div>
+</section>
+
+<section id="rotation" data-group="G.">
+  <div class="stage"><span class="num">07</span><span class="kicker">Rotation</span></div>
+  <h2>Replacing pytorch3d without changing conventions</h2>
+  <p class="lede">
+    Upstream converts rotations through <code>pytorch3d</code>. We reimplemented the two maps in
+    numpy to avoid a heavy pinned dependency &mdash; which is only safe if the conventions match
+    exactly, including which two rows of the matrix become the 6D vector.
+  </p>
+  <div class="eq">
+    <span class="lbl">The 6D continuous representation (Zhou et al.)</span>
+    forward: <span class="m">R</span> &rarr; (<span class="m">R</span><sub>0&middot;</sub>, <span class="m">R</span><sub>1&middot;</sub>)
+    &mdash; the first two <em>rows</em>, flattened<br>
+    inverse: <span class="m">b</span><sub>1</sub> = norm(<span class="m">a</span><sub>1</sub>),
+    &nbsp; <span class="m">b</span><sub>2</sub> = norm(<span class="m">a</span><sub>2</sub> &minus; (<span class="m">b</span><sub>1</sub>&middot;<span class="m">a</span><sub>2</sub>)<span class="m">b</span><sub>1</sub>),
+    &nbsp; <span class="m">b</span><sub>3</sub> = <span class="m">b</span><sub>1</sub> &times; <span class="m">b</span><sub>2</sub>
+  </div>
+  <p>
+    Rows, not columns &mdash; getting that backwards yields the transpose, which is still a valid
+    rotation and so fails silently. The check compares against the matrix entries directly with a
+    threshold of exactly zero.
+  </p>
+  <p>
+    Gram&ndash;Schmidt also does real work at deployment: a network's six output numbers are not
+    orthonormal, and this map projects <em>any</em> six numbers onto SO(3). That is checked with
+    heavy noise added, verifying <span class="m">RR</span><sup>T</sup> = <span class="m">I</span>
+    and det&nbsp;<span class="m">R</span> = +1 rather than just that it returns something.
+  </p>
+  <div class="evidence"></div>
+</section>
+
+<section id="pipeline" data-group="H.,I.">
+  <div class="stage"><span class="num">08</span><span class="kicker">Pipeline</span></div>
+  <h2>The parts that are ours, not the maths</h2>
+  <p class="lede">
+    Three claims about the code around the spline: the fit honours its tolerance, the frame&rarr;chunk
+    assignment does what it says, and the normalisation is invertible.
+  </p>
+  <p>
+    The assignment check is the interesting one. The sampler assigns chunks with an imperative
+    loop carried over from upstream &mdash; a running index advanced by a
+    <code>while</code> inside a <code>for</code>. That is easy to port subtly wrong, so it is
+    verified against an independently derived closed form: frame
+    <span class="m">i</span> takes the smallest window <span class="m">s</span> with
+    <span class="m">t</span><sub>s+k</sub> &ge; <span class="m">i</span>. Agreement is required on
+    every frame of every fitted episode, not a sample.
+  </p>
+  <div class="evidence"></div>
+</section>
+
+<section id="normalisation" data-group="J.">
+  <div class="stage"><span class="num">09</span><span class="kicker">Normalisation</span></div>
+  <h2>One scale per column</h2>
+  <p class="lede">
+    Upstream's normaliser collapses the step axis before computing statistics, so all 26 rows of a
+    column share one scale. That is deliberate, and worth stating.
+  </p>
+  <p>
+    Normalising each row independently would destroy the knot column's meaning: monotonicity is a
+    relation <em>between</em> rows, and it only survives into the network's output space if the
+    rows share an origin and a scale. The converted dataset's statistics are written this way and
+    the check confirms they really are constant down every column.
+  </p>
+  <div class="evidence"></div>
+</section>
+
+<section id="limits">
+  <div class="stage"><span class="num">10</span><span class="kicker">Limits</span></div>
+  <h2>What this does not prove</h2>
+  <p class="lede">
+    Everything above concerns whether the implementation computes what the mathematics says. It is
+    silent on whether the mathematics is the right choice.
+  </p>
+  <div class="note">
+    <h4>Out of scope</h4>
+    <p>
+      <b>Optimality of the fit.</b> <code>generate_knots</code> grows a knot vector greedily and
+      stops at the first one inside tolerance. Nothing here claims that is the fewest knots
+      possible, only that the result meets the tolerance it promised.
+    </p>
+    <p>
+      <b>Whether 0.01 is the right tolerance.</b> That was chosen by measurement, not proof &mdash;
+      the sweep is in the walkthrough. A different task might want a different point on that curve.
+    </p>
+    <p>
+      <b>Policy accuracy.</b> Whether a trained network predicts good parameters is an empirical
+      question, handled by <code>eval_bspline_checkpoint.py</code>. These checks would all pass on
+      an untrained model.
+    </p>
+    <p>
+      <b>The knot column's fragility.</b> The measured failure mode &mdash; a small fraction of
+      predicted knot pairs coming out non-monotone, repaired by <code>safer_knots</code> &mdash;
+      is a property of the training setup, not of the maths. Section 04 verifies that the
+      relative-knot encoding is available and exact; it does not claim that switching to it helps.
+    </p>
+  </div>
+</section>
+
+</main>
+</div>
+
+<footer>
+  <p>
+    Generated by <code>bspline/verify_math.py</code>, rendered by
+    <code>bspline/build_verification_page.py</code>. Every number on this page is a measurement
+    from that run &mdash; re-run it and the page regenerates. Companion to the method walkthrough,
+    <em>Knots Instead of Waypoints</em>.
+  </p>
+  <p>
+    Method from <b>B-spline Policy: Accelerating Manipulation Policies via B-spline Action
+    Representations</b> (Han, Xiong, Chen, Liu, Torralba, Zhu, Du &mdash; arXiv:2607.09648).
+  </p>
+</footer>
+</div>
+
+<script id="results" type="application/json">/*__RESULTS__*/</script>
+<script>
+(() => {
+"use strict";
+const R = JSON.parse(document.getElementById("results").textContent);
+
+const fmtVal = v => {
+  if (v === 0) return "0";
+  if (Math.abs(v) >= 1 && Number.isInteger(v)) return String(v);
+  return v.toExponential(2);
+};
+const fmtThr = v => (v === 0 ? "0 — exact" : "≤ " + v.toExponential(0));
+
+// ---- score ----
+const ok = R.n_passed === R.n_total;
+document.getElementById("score").textContent = `${R.n_passed}/${R.n_total}`;
+document.getElementById("score").style.color = ok ? "var(--ok)" : "var(--bad)";
+document.getElementById("score-sub").textContent = "checks";
+document.getElementById("score-text").textContent = ok
+  ? `Every claim below held against an independent reference. Degree ${R.config.degree}, `
+    + `chunk size ${R.config.chunk_size}, tolerance ${R.config.max_error}, `
+    + `${R.config.n_steps} knots per chunk.`
+  : `${R.n_total - R.n_passed} check(s) failed — see the marked rows below.`;
+
+// ---- evidence blocks, filed under the section carrying their group ----
+const byGroup = {};
+for (const c of R.checks) {
+  const g = c.group.slice(0, 2);
+  if (!byGroup[g]) byGroup[g] = [];
+  byGroup[g].push(c);
+}
+
+for (const sec of document.querySelectorAll("section[data-group]")) {
+  // a section may claim several groups, e.g. data-group="H.,I."
+  const list = [];
+  for (const g of sec.dataset.group.split(",")) {
+    for (const c of (byGroup[g.trim()] || [])) list.push(c);
+  }
+  const host = sec.querySelector(".evidence");
+  for (const c of list) {
+    const el = document.createElement("div");
+    el.className = "check";
+    const pass = c.passed;
+    el.innerHTML =
+      `<div class="check-head">
+         <span class="badge${pass ? "" : " fail"}">${pass ? "HOLDS" : "FAILS"}</span>
+         <div>
+           <p class="check-claim">${c.claim}</p>
+           <span class="ref">checked against <b>${c.reference}</b></span>
+         </div>
+       </div>
+       <div class="check-meta">
+         <span>${c.metric}: <b class="val${pass ? "" : " fail"}">${fmtVal(c.value)}</b></span>
+         <span>threshold <b>${fmtThr(c.threshold)}</b></span>
+         <span>n = <b>${c.samples.toLocaleString("en-US")}</b></span>
+       </div>` +
+      (c.detail ? `<p class="check-note">${c.detail}</p>` : "");
+    host.appendChild(el);
+  }
+}
+
+// ---- section rail ----
+const ol = document.getElementById("rail");
+const secs = [...document.querySelectorAll("main section")];
+secs.forEach(sec => {
+  const n = sec.querySelector(".stage .num").textContent;
+  const k = sec.querySelector(".stage .kicker").textContent;
+  const li = document.createElement("li");
+  li.innerHTML = `<a href="#${sec.id}"><span class="n">${n}</span>${k}</a>`;
+  ol.appendChild(li);
+});
+const links = [...ol.querySelectorAll("a")];
+const io = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (!e.isIntersecting) return;
+    const i = secs.indexOf(e.target);
+    links.forEach((a, j) => a.classList.toggle("on", i === j));
+  });
+}, {rootMargin: "-15% 0px -70% 0px"});
+secs.forEach(s => io.observe(s));
+})();
+</script>
