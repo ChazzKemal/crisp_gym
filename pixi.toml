@@ -8,13 +8,8 @@ channels = ["https://fast.prefix.dev/conda-forge"]
 name = "crisp_gym"
 platforms = ["linux-64"]
 
-[activation]
-scripts = [
-    "scripts/set_env.sh",
-]
-
 [dependencies]
-python = "3.11.*"
+python = "3.12.*"
 compilers = "*"
 cmake = "*"
 pkg-config = "*"
@@ -29,57 +24,62 @@ libgl-devel = "*"
 
 [environments]
 dev = { features = ["dev"] }
-humble = { features = ["humble"] }
-humble-lerobot = { features = ["humble", "lerobot", "dev"] }
 lerobot = { features = ["lerobot"] }
 jazzy = { features = ["jazzy"] }
-#jazzy-lerobot = { features = ["jazzy", "lerobot", "dev"] }
+jazzy-lerobot = { features = ["jazzy", "lerobot", "dev"] }
 
 [feature.dev.pypi-dependencies]
 pre-commit = "*"
 ruff = "*"
 debugpy = ">=1.8.14,<2"
 pudb = ">=2025.1.3, <2026"
+matplotlib = ">=3.10.9, <4"
 
 [feature.lerobot.dependencies]
 pynput = "*"
-rerun-sdk = "=0.22.1"
 
 [feature.lerobot.pypi-dependencies]
+pyspacemouse = "*"
 # === Working version ===
 # lerobot = { git = "https://github.com/huggingface/lerobot", rev = "dacd1d7f5c719c3e56d7b7154a751bef6d5bd23c", extras = ["smolvla"]}
 # === Newer version ===
 # lerobot = { git = "https://github.com/huggingface/lerobot", rev = "74690e3f56a90b6ea314afbfb3b801a3d842a005", extras = ["smolvla"]}
 # === Local version ===
-lerobot = { path = "../clare_rebuttal/lerobot_lsy/", editable = true }
-
-[feature.humble]
-channels = ["https://prefix.dev/robostack-humble"]
-
-[feature.humble.dependencies]
-ros-humble-desktop = "*"
-colcon-common-extensions = "*"
-ros-humble-ros2-control = "*"
-ros-humble-ros2-controllers = "*"
-rosdep = "*"
-ros-humble-rmw-cyclonedds-cpp = "*"
-ros-humble-image-transport-plugins = "*"
+# lerobot = { path = "../lerobot/", editable = true }
+# === Remote version ===
+lerobot = { git = "https://github.com/huggingface/lerobot", rev = "74690e3f56a90b6ea314afbfb3b801a3d842a005", extras = ["smolvla"]}
 
 [feature.jazzy]
 channels = ["https://prefix.dev/robostack-jazzy"]
 
 [feature.jazzy.dependencies]
-ros-jazzy-desktop = "*"
-ros-jazzy-ros2-control = "*"
-ros-jazzy-ros2-controllers = "*"
+python = "3.12.*"
+# NOTE: ros-jazzy packages pin numpy<2.0 (compiled against numpy 1.x ABI),
+# so do NOT add numpy>=2.0 here — that conflicts with all ROS packages.
+# ros-jazzy-desktop pulls in depthimage-to-laserscan which requires numpy<2.0
+# Use ros-base + only the packages crisp_py actually needs
+ros-jazzy-ros-base = "*"
+ros-jazzy-control-msgs = "*"
+ros-jazzy-controller-manager-msgs = "*"
+ros-jazzy-trajectory-msgs = "*"
+ros-jazzy-geometry-msgs = "*"
+ros-jazzy-sensor-msgs = "*"
+ros-jazzy-image-transport = "*"
+ros-jazzy-cv-bridge = "*"
 colcon-common-extensions = "*"
 rosdep = "*"
 ros-jazzy-rmw-cyclonedds-cpp = "*"
-ros-jazzy-rmw-zenoh-cpp = "*"
+ros-jazzy-rmw-fastrtps-cpp = "*"
+pinocchio = "*"
+ros-jazzy-ros2controlcli = ">=4.32.0,<5"
+
+[feature.jazzy.activation]
+scripts = ["scripts/setup_robot_env.sh"]
+env = { RMW_IMPLEMENTATION = "rmw_fastrtps_cpp" }
 
 [pypi-dependencies]
 crisp_gym = { path = ".", editable = true }
-# crisp_python = { path = "../crisp_py", editable = true }
+crisp_python = { path = "../crisp_py", editable = true }
 
 [tasks]
 configure = "bash scripts/configure.sh"

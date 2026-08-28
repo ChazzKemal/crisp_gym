@@ -19,7 +19,6 @@ try:
 except ImportError:
     from lerobot.constants import HF_LEROBOT_HOME
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from pynput import keyboard
 from rclpy.executors import SingleThreadedExecutor
 from rich import print
 from rich.panel import Panel
@@ -382,10 +381,15 @@ class RecordingManager(ABC):
         self.writer.join()
 
     def _set_to_wait(self) -> None:
-        """Set to wait if possible."""
+        """Set to wait if possible.
+
+        If num_episodes <= 0, recording runs indefinitely until the user
+        explicitly presses 'q' (or sends the 'exit' ROS message).
+        """
         if self.state not in ["to_be_saved", "to_be_deleted"]:
             raise ValueError("Can not go to wait state if the state is not to be saved or deleted!")
-        if self.episode_count >= self.config.num_episodes:
+        unlimited = self.config.num_episodes <= 0
+        if not unlimited and self.episode_count >= self.config.num_episodes:
             self.state = "exit"
         else:
             self.state = "is_waiting"
@@ -471,7 +475,13 @@ class ROSRecordingManager(RecordingManager):
 
 
 class KeyboardRecordingManager(RecordingManager):
-    """Keyboard-based recording manager for controlling episode recording."""
+    """Keyboard-based recording manager for controlling episode recording.
+
+    Reads single characters from sys.stdin in raw mode via a background thread.
+    This approach is reliable in any terminal environment (SSH, Wayland, VSCode,
+    etc.) because it reads directly from the process's stdin rather than relying
+    on OS-level event capture (pynput/X11) which fails under Wayland security.
+    """
 
     def __init__(self, config: RecordingManagerConfig | None = None, **kwargs) -> None:  # noqa: ANN003
         """Initialize keyboard recording manager.
@@ -480,55 +490,76 @@ class KeyboardRecordingManager(RecordingManager):
             config: RecordingManagerConfig instance. If provided, **kwargs are ignored except for backwards compatibility.
             **kwargs: Individual parameters for backwards compatibility.
         """
+        import sys
+        import termios
+        import tty
         super().__init__(config=config, **kwargs)
-        self.listener = keyboard.Listener(on_press=self._on_press)
+        self._stop_event = threading.Event()
+        self._listener_thread: threading.Thread | None = None
+        self._old_term_settings = None
 
     @override
     def get_instructions(self) -> str:
         """Returns the instructions to use the recording manager."""
         return "[b]Keys for recording:[/b]\n<r> To start/stop [b]R[/b]ecording.\n<s> To [b]S[/b]ave the current recorded episode.\n<d> to [b]D[/b]elete the current episode.\n<q> To [b]Q[/b]uit the recording."
 
-    def _on_press(self, key: keyboard.KeyCode | keyboard.Key | None) -> None:
-        """Handle keyboard press events.
+    def _handle_char(self, ch: str) -> None:
+        """Update state machine based on pressed character."""
+        if self.state == "is_waiting":
+            if ch == "r":
+                self.state = "recording"
+            elif ch == "q":
+                self.state = "exit"
+        elif self.state == "recording":
+            if ch == "r":
+                self.state = "paused"
+        elif self.state == "paused":
+            if ch == "q":
+                self.state = "exit"
+            elif ch == "s":
+                self.state = "to_be_saved"
+            elif ch == "d":
+                self.state = "to_be_deleted"
 
-        Args:
-            key: The keyboard key that was pressed
-        """
-        if key is None:
-            return
+    def _listen_loop(self) -> None:
+        """Background thread: read single chars from stdin in raw mode."""
+        import select
+        import sys
+        import termios
+        import tty
 
-        if isinstance(key, keyboard.Key):
-            return
-
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
         try:
-            if self.state == "is_waiting":
-                if key.char == "r":
-                    self.state = "recording"
-                if key.char == "q":
-                    self.state = "exit"
-            elif self.state == "recording":
-                if key.char == "r":
-                    self.state = "paused"
-            elif self.state == "paused":
-                if key.char == "q":
-                    self.state = "exit"
-                if key.char == "s":
-                    self.state = "to_be_saved"
-                if key.char == "d":
-                    self.state = "to_be_deleted"
-        except AttributeError:
-            pass
+            tty.setraw(fd)
+            while not self._stop_event.is_set():
+                # Non-blocking check with 50 ms timeout so we can honour _stop_event
+                r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if r:
+                    ch = sys.stdin.read(1)
+                    if ch:
+                        self._handle_char(ch)
+        except Exception as exc:
+            logger.debug(f"Keyboard listener error: {exc}")
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     def stop(self) -> None:
-        """Stop the keyboard listener."""
-        self.listener.stop()
+        """Stop the keyboard listener thread."""
+        self._stop_event.set()
+        if self._listener_thread is not None:
+            self._listener_thread.join(timeout=1.0)
 
     def __enter__(self) -> "RecordingManager":  # noqa: D105
-        self.listener.start()
+        self._stop_event.clear()
+        self._listener_thread = threading.Thread(
+            target=self._listen_loop, daemon=True, name="keyboard_listener"
+        )
+        self._listener_thread.start()
         return super().__enter__()
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:  # noqa: ANN001, D105
-        self.listener.stop()
+        self.stop()
         super().__exit__(exc_type, exc_value, traceback)
 
 

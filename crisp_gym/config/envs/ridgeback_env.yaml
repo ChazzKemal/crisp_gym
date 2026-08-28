@@ -1,0 +1,36 @@
+# Ridgeback UR10e + Orbbec Femto Bolt environment configuration
+#
+# This config is used by 08_ridgeback_spacemouse_record.py.
+# It does NOT use ManipulatorEnv (which is Franka-only); instead the script
+# reads these values directly and builds features manually.
+
+control_frequency: 20.0          # Hz — matches SpaceMouse teleop loop rate
+gripper_mode: "absolute_continuous"
+use_relative_actions: true        # delta actions for Diffusion Policy
+orientation_representation: "euler"   # xyz Euler → 3-dim rotation
+
+# Safety workspace limits (base_link frame, metres)
+# Adjust to your actual table/task setup.
+min_z: 0.05     # do not go below 5 cm above base — prevents table collision
+max_z: 0.8      # upper limit
+min_x: -0.8
+max_x:  0.8
+min_y: -0.8
+max_y:  0.8
+
+# Camera resolution recorded into LeRobot Dataset (RGB only).
+# Depth is stored separately via DataCollector (float32 npz).
+# Must match what Orbbec driver publishes (or resize in data_fn).
+camera_name: "camera"
+image_height: 480
+image_width:  640
+
+# ROS topic namespace for the Orbbec camera
+camera_namespace: "/camera"
+
+# Depth storage: written by DataCollector alongside the LeRobot Dataset
+depth_output_dir: "~/data/ridgeback_depth"
+
+# Robot
+urdf_path: "/home/yunfei/clearpath_remote_ws/src/tum09_ridgeback/tum09_bringup/config/robot.urdf"
+home_duration: 8.0      # seconds for robot.home()

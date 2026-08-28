@@ -1,0 +1,127 @@
+# UR10e on Clearpath Ridgeback — crisp_gym Cartesian environment
+#
+# Real robot (not sim). For sim, topic names differ (no namespace).
+#
+# Usage:
+#   from crisp_gym.envs.manipulator_env import ManipulatorCartesianEnv
+#   from crisp_gym.envs.manipulator_env_config import make_env_config
+#
+#   config = make_env_config("ur10e_ridgeback_env")
+#   env = ManipulatorCartesianEnv(config=config)
+#   env.wait_until_ready()
+#   obs, info = env.reset()
+#
+# TODO: After testing on the real robot, verify/update:
+#   - Topic names (target_pose, current_pose, joint_states)
+#   - End-effector frame (arm_0_tool0 vs arm_0_gripper_robotiq_85_tcp)
+#   - Gripper command topic
+#   - Camera topic/frame
+#   - orientation_representation (euler vs quaternion vs angle_axis)
+#   - Safety workspace limits
+
+control_frequency: 20.0
+use_relative_actions: false       # absolute target poses
+
+# Controllers that must stay active through every env.switch_controller() call.
+# The safety_observer_controller claims no command interfaces, so keeping it
+# active across cartesian<->joint switches is safe and required — otherwise the
+# safety latch is lost every time the env switches motion controllers.
+protected_controllers:
+  - safety_observer_controller
+
+# TODO: Check if euler is the right representation for your use case.
+# Other options: "quaternion" (4-dim), "angle_axis" (3-dim)
+orientation_representation: "euler"
+
+# --- Robot Config ---
+robot_config:
+  robot_type: "ur"
+  joint_names:
+    - arm_0_elbow_joint
+    - arm_0_shoulder_lift_joint
+    - arm_0_shoulder_pan_joint
+    - arm_0_wrist_1_joint
+    - arm_0_wrist_2_joint
+    - arm_0_wrist_3_joint
+  # Home pose: upright with elbow at 90°
+  home_config: [1.57, -1.5708, 1.5708, -1.5708, -1.5708, 0]
+  # home_config: [0, -1.5708, 1.5708, -1.5708, -1.5708, 0]
+  base_frame: "arm_0_base_link"
+  # TODO: Check on real robot — use arm_0_tool0 (UR flange) or
+  #       arm_0_gripper_robotiq_85_tcp (gripper fingertip)?
+  target_frame: "arm_0_gripper_tcp"
+  default_controller: "cartesian_controller"
+  cartesian_impedance_controller_name: "cartesian_controller"
+  joint_trajectory_controller_name: "joint_trajectory_controller"
+  # TODO: Verify the topic names on the real robot with ros2 topic list.
+  # On the real robot, these may be namespaced under /r100_0207/manipulators/...
+  target_pose_topic: "target_pose"
+  current_pose_topic: "current_pose"
+  current_joint_topic: "joint_states"
+  publish_frequency: 20.0
+  # track_mocap.py is the authoritative publisher of /target_pose.
+  # Set this to false so the crisp_py Robot client subscribes to the topic
+  # instead of publishing — otherwise both fight for the cartesian_controller
+  # and the arm gets pinned to its start pose. Recording reads env.robot.target_pose,
+  # which now mirrors the live mocap target for correct action logging.
+  publish_target_pose: false
+
+# --- Gripper Config ---
+# Robotiq 2F-85 on the Ridgeback. Binary open/closed via GripperCommand action.
+gripper_config:
+  min_value: 0.8
+  max_value: 0.0
+  command_topic: "/gripper/gripper_controller/gripper_cmd"
+  joint_state_topic: "/gripper/joint_states"
+  target_state_topic: "/target_gripper_state"
+  use_gripper_command_action: true
+  index: 0
+  max_delta: 1.0
+
+gripper_mode: "absolute_continuous"
+
+# --- Camera Config ---
+# Orbbec Femto Bolt (launched via: pixi run orbbec)
+camera_configs:
+  - camera_name: "camera"
+    camera_frame: "camera_frame"
+    camera_color_image_topic: "/camera/color/image_raw"
+    camera_color_info_topic: "/camera/color/camera_info"
+    resolution: [640, 480]
+    max_image_delay: 1.0
+
+sensor_configs: []
+
+# Controller parameter files — leave null to use whatever the controller loaded.
+# You can point these to your crisp_controllers.yaml if you want to override gains.
+cartesian_control_param_config: null
+joint_control_param_config: null
+
+# --- Safety workspace limits (arm_0_base_link frame, metres) ---
+# TODO: Adjust to your actual table/task setup.
+#
+# NOTE (2026-04-15): max_x raised from 0.9 → 1.0 because the home pose
+# `home_config: [1.57, -1.5708, 1.5708, -1.5708, -1.5708, 0]` lands the EE
+# at x ≈ 0.931, which was *outside* the previous declared box. Scripts that
+# go through env.step() / clip_position_for_safety were clipping the home
+# pose itself; 16_calibration_record.py's validator trips on it too.
+# 1.0 m is still well inside the UR10e's ~1.3 m reach envelope.
+min_z: 0.05
+max_z: 1.2
+min_x: -1.0
+max_x: 1.0
+min_y: -1.0
+max_y: 1.0
+
+# --- Observation keys included in observation.state ---
+# These control what's returned in obs dict:
+#   observation.state.joints     — 6-dim joint positions (rad)
+#   observation.state.cartesian  — 6-dim EE pose (m, rad) [x,y,z,roll,pitch,yaw]
+#   observation.state.gripper    — 1-dim gripper state [0..1]
+#   observation.state.target     — 6-dim target pose (for cartesian env)
+observations_to_include_to_state:
+  - "observation.state.cartesian"
+  - "observation.state.joints"
+  - "observation.state.gripper"
+  - "observation.state.gripper_target"
+  - "observation.state.target"

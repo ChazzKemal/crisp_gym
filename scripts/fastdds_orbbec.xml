@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastrtps_profiles">
+    <profiles>
+        <participant profile_name="orbbec_participant" is_default_profile="true">
+            <rtps>
+                <name>OrbbecParticipant</name>
+                <useBuiltinTransports>true</useBuiltinTransports>
+                <sendSocketBufferSize>1048576</sendSocketBufferSize>
+                <listenSocketBufferSize>4194304</listenSocketBufferSize>
+            </rtps>
+        </participant>
+
+        <data_writer profile_name="default_image_writer" is_default_profile="true">
+            <topic>
+                <historyQos>
+                    <kind>KEEP_LAST</kind>
+                    <depth>5</depth>
+                </historyQos>
+            </topic>
+            <qos>
+                <publishMode>
+                    <kind>ASYNCHRONOUS</kind>
+                </publishMode>
+            </qos>
+        </data_writer>
+
+        <data_reader profile_name="default_image_reader" is_default_profile="true">
+            <topic>
+                <historyQos>
+                    <kind>KEEP_LAST</kind>
+                    <depth>5</depth>
+                </historyQos>
+            </topic>
+        </data_reader>
+    </profiles>
+</dds>

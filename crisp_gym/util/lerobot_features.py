@@ -11,7 +11,6 @@ import gymnasium
 import numpy as np
 import rich
 
-from crisp_gym.envs.manipulator_env import ManipulatorBaseEnv, make_env
 from crisp_gym.util.control_type import ControlType
 
 try:
@@ -28,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_features(
-    env: ManipulatorBaseEnv,
+    env,
     use_video: bool = True,
     ignore_keys: list[str] = None,
 ) -> Dict[str, Dict]:
@@ -83,6 +82,10 @@ def get_features(
                 names = ctrl_dims[ControlType.CARTESIAN][
                     :-1
                 ]  # Exclude gripper from cartesian state
+            elif "gripper_target" in feature_key:
+                # Must match before the bare "gripper" branch below, otherwise
+                # observation.state.gripper_target collides with the gripper name.
+                names = ["gripper_target"]
             elif "gripper" in feature_key:
                 names = ["gripper"]
             elif "target" in feature_key:
@@ -333,6 +336,7 @@ def numpy_obs_to_torch(obs: Dict[str, Any]) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
+    from crisp_gym.envs.manipulator_env import make_env
     env = make_env("right_aloha_franka")
     features = get_features(env, use_video=True)
 

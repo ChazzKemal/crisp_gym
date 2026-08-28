@@ -82,18 +82,42 @@ class ManipulatorBaseEnv(gym.Env):
         if not rclpy.ok():
             rclpy.init()
 
+        # Optional shared-executor path. When enabled, ALL crisp_py
+        # components (Robot, Gripper, Cameras, Sensors) register their
+        # nodes with a single MultiThreadedExecutor and are serviced by
+        # ONE daemon spin thread instead of one per component. Eliminates
+        # the 4× rclpy wait-set bookkeeping contention identified by
+        # py-spy. num_threads sized to cover sum(THREADS_REQUIRED) across
+        # all components with a generous buffer for ReentrantCallbackGroup
+        # parallelism.
+        self._shared_executor = None
+        self._shared_executor_thread = None
+        if getattr(self.config, "use_shared_executor", False):
+            import threading
+            self._shared_executor = rclpy.executors.MultiThreadedExecutor(
+                num_threads=12,
+            )
+            logger.info("ManipulatorEnv: using shared MultiThreadedExecutor (num_threads=12)")
+
+        _executor_kw = (
+            {"executor": self._shared_executor} if self._shared_executor is not None else {}
+        )
+
         self.robot = Robot(
             namespace=namespace,
             robot_config=self.config.robot_config,
+            **_executor_kw,
         )
         self.gripper = Gripper(
             namespace=namespace,
             gripper_config=self.config.gripper_config,
+            **_executor_kw,
         )
         self.cameras = [
             Camera(
                 namespace=namespace,
                 config=camera_config,
+                **_executor_kw,
             )
             for camera_config in self.config.camera_configs
         ]
@@ -101,9 +125,21 @@ class ManipulatorBaseEnv(gym.Env):
             Sensor(
                 namespace=namespace,
                 sensor_config=sensor_config,
+                **_executor_kw,
             )
             for sensor_config in self.config.sensor_configs
         ]
+
+        # All component nodes are now registered. Start the single shared
+        # spin thread (mirrors the per-component pattern, just consolidated).
+        if self._shared_executor is not None:
+            def _spin_shared() -> None:
+                while rclpy.ok():
+                    self._shared_executor.spin_once(timeout_sec=0.1)
+            self._shared_executor_thread = threading.Thread(
+                target=_spin_shared, daemon=True, name="crisp-shared-spin",
+            )
+            self._shared_executor_thread.start()
         for sensor in self.sensors:
             logger.debug(f"Sensor topic: {sensor.config.data_topic}")
 
@@ -217,6 +253,12 @@ class ManipulatorBaseEnv(gym.Env):
                 high=np.array([1.0], dtype=np.float32),
                 dtype=np.float32,
             ),
+            # Commanded gripper target (same [0, 1] convention as GRIPPER_OBS).
+            ObservationKeys.GRIPPER_TARGET_OBS: gym.spaces.Box(
+                low=np.array([0.0], dtype=np.float32),
+                high=np.array([1.0], dtype=np.float32),
+                dtype=np.float32,
+            ),
             # Joint state
             ObservationKeys.JOINT_OBS: gym.spaces.Box(
                 low=np.ones((self.config.robot_config.num_joints(),), dtype=np.float32) * -np.pi,
@@ -262,8 +304,6 @@ class ManipulatorBaseEnv(gym.Env):
                 file_path=self.config.joint_control_param_config
             )
 
-    _REQUIRED_CONTROLLERS = ["joint_trajectory_controller", "cartesian_impedance_controller"]
-
     def wait_until_ready(self):
         """Wait until the robot, gripper, cameras, and sensors are ready."""
         logger.debug("Waiting for robot, gripper, cameras, and sensors to be ready...")
@@ -295,12 +335,17 @@ class ManipulatorBaseEnv(gym.Env):
         if not self.robot.controller_switcher_client.is_server_ready():
             raise TimeoutError("Controller manager services are not available.")
 
+        required_controllers = [
+            self.config.robot_config.joint_trajectory_controller_name,
+            self.config.robot_config.cartesian_impedance_controller_name,
+        ]
+
         t_start = time.time()
         while time.time() - t_start < timeout:
             controllers = self.robot.controller_switcher_client.get_controller_list()
             controller_names = [c.name for c in controllers]
             missing = [
-                name for name in self._REQUIRED_CONTROLLERS if name not in controller_names
+                name for name in required_controllers if name not in controller_names
             ]
             if not missing:
                 logger.debug("All required controllers are loaded.")
@@ -353,6 +398,20 @@ class ManipulatorBaseEnv(gym.Env):
         # Gripper state
         if ObservationKeys.GRIPPER_OBS in self.config.observations_to_include_to_state:
             obs[ObservationKeys.GRIPPER_OBS] = gripper_value.astype(np.float32)
+
+        # Gripper target (commanded position, same convention as GRIPPER_OBS: 1=closed, 0=open)
+        if ObservationKeys.GRIPPER_TARGET_OBS in self.config.observations_to_include_to_state:
+            if self.config.gripper_mode != GripperMode.NONE and self.gripper is not None:
+                target_val = (
+                    self.gripper.target
+                    if self.gripper._target is not None
+                    else self.gripper.value
+                )
+                obs[ObservationKeys.GRIPPER_TARGET_OBS] = np.array(
+                    [1 - target_val], dtype=np.float32
+                )
+            else:
+                obs[ObservationKeys.GRIPPER_TARGET_OBS] = np.array([0.0], dtype=np.float32)
 
         # Joint state
         if ObservationKeys.JOINT_OBS in self.config.observations_to_include_to_state:
@@ -475,7 +534,16 @@ class ManipulatorBaseEnv(gym.Env):
             else ControlType.from_string(control_type)
         )
 
-        self.robot.controller_switcher_client.switch_controller(desired_ctrl_type.controller_name())
+        if desired_ctrl_type == ControlType.CARTESIAN:
+            controller_name = self.config.robot_config.cartesian_impedance_controller_name
+        elif desired_ctrl_type == ControlType.JOINT:
+            controller_name = self.config.robot_config.joint_trajectory_controller_name
+        else:
+            controller_name = desired_ctrl_type.controller_name()
+        self.robot.controller_switcher_client.switch_controller(
+            controller_name,
+            controllers_that_should_be_active=list(self.config.protected_controllers),
+        )
 
     def switch_to_default_controller(self):
         """Switch to the default controller type."""

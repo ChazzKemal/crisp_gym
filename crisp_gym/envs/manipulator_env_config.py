@@ -24,6 +24,7 @@ class ObservationKeys:
     STATE_OBS = "observation.state"
 
     GRIPPER_OBS = STATE_OBS + ".gripper"
+    GRIPPER_TARGET_OBS = STATE_OBS + ".gripper_target"
     JOINT_OBS = STATE_OBS + ".joints"
     CARTESIAN_OBS = STATE_OBS + ".cartesian"
     TARGET_OBS = STATE_OBS + ".target"
@@ -34,6 +35,7 @@ class ObservationKeys:
 
 ALLOWED_STATE_OBS_KEYS = {
     ObservationKeys.GRIPPER_OBS,
+    ObservationKeys.GRIPPER_TARGET_OBS,
     ObservationKeys.JOINT_OBS,
     ObservationKeys.CARTESIAN_OBS,
     ObservationKeys.TARGET_OBS,
@@ -84,6 +86,20 @@ class ManipulatorEnvConfig(ABC):
     orientation_representation: OrientationRepresentation = OrientationRepresentation.EULER
 
     use_relative_actions: bool = True
+
+    # When True, ManipulatorEnv creates a SINGLE MultiThreadedExecutor + spin
+    # thread and passes it to Robot / Gripper / Camera / Sensor instead of
+    # letting each spawn its own. Removes per-component GIL contention from
+    # rclpy's wait-set bookkeeping (~4× spin loops competing for the GIL in
+    # the dual_cam deploy). Backward compat: defaults to False; opt-in via
+    # env yaml.
+    use_shared_executor: bool = False
+
+    # Controllers that must remain active across every switch_controller() call.
+    # Typical entry: "safety_observer_controller" — the safety observer claims no
+    # command interfaces so preserving it across motion-controller switches is safe
+    # and necessary to keep the safety latch armed during recording / teleop.
+    protected_controllers: List[str] = field(default_factory=list)
 
     # Safety limits
     min_x: None | float = None
