@@ -83,3 +83,47 @@ def test_tail_stderr_never_raises_on_the_failure_path(tmp_path):
     assert "unavailable" in _tail_stderr(tmp_path / "missing.log")
     empty = tmp_path / "empty.log"; empty.write_text("")
     assert "nothing" in _tail_stderr(empty)
+
+
+def test_cli_defaults_are_usable_as_a_deploy_namespace():
+    """Pace seeds crisp_gym's ~60 deploy flags from this parser's own defaults.
+
+    Restating them in draccus would let the two drift, and a flag nobody thought
+    about would silently get a fresh value instead of the one proven on this rig. So
+    the parser is asked for its defaults and only the exposed flags are overridden --
+    which only works if parse_args([]) succeeds with no arguments at all.
+    """
+    from crisp_gym.deploy.cli import build_parser
+
+    args = build_parser().parse_args([])
+    # every attribute the session phases and the loop read
+    for name in ("env_config", "fps", "dry_run", "offline", "yes", "max_chunks",
+                 "scale_kp", "max_speed", "min_speed", "clamp_deg", "lookahead",
+                 "lookbehind", "cum_lookahead", "invert_gripper",
+                 "gripper_slowdown_frames", "cpp_sender", "startup_delay",
+                 "overlap_threshold", "stride", "kp_exp", "kd_exp", "n_act"):
+        assert hasattr(args, name), f"deploy namespace is missing {name!r}"
+
+    # the defaults a method-driven run relies on being safe
+    assert args.dry_run is False and args.offline is False
+    assert args.max_speed == 1.0 and args.min_speed == 1.0, "no speedup unless asked"
+    assert args.scale_kp is False, "gains untouched unless asked"
+
+
+def test_session_exposes_every_phase_the_runner_calls():
+    """Pace's run_on_robot() calls these by name; renaming one breaks deploy."""
+    from crisp_gym.deploy import session
+    for phase in ("build_env", "phase_home", "phase_switch_controller",
+                  "phase_scaler", "phase_pin_gripper_speed", "phase_gil_hygiene",
+                  "phase_publish_channels", "phase_start_sender",
+                  "phase_video_and_delay"):
+        assert callable(getattr(session, phase, None)), f"session.{phase} missing"
+
+
+def test_publish_channels_carries_what_the_sender_needs():
+    from crisp_gym.deploy.session import PublishChannels
+    ch = PublishChannels()
+    for f in ("base_frame_id", "target_pose_pub", "pose_msg", "gripper_raw_pub",
+              "gripper_action_client", "gripper_max_effort",
+              "gripper_unnormalize_fn", "gripper_enabled"):
+        assert hasattr(ch, f), f
