@@ -83,7 +83,11 @@ from crisp_gym.deploy.gains import (
     ReplayScaler,
     _spawn_gripper_speed_controller,
 )
-from crisp_gym.deploy.obs import _build_obs_schema, _get_obs_zerofill
+from crisp_gym.deploy.obs import (
+    _ZEROFILL_COUNTS,
+    _build_obs_schema,
+    _get_obs_zerofill,
+)
 from crisp_gym.deploy.sources import (
     ChunkSource,
     DatasetExhausted,
