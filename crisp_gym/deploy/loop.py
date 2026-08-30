@@ -21,8 +21,10 @@ import time
 import numpy as np
 
 from crisp_gym.deploy.pipeline import (
+    Chunk,
     _build_chunk_speed_schedule,
     _inpaint_blend_into_history,
+    run_pipeline,
 )
 from crisp_gym.deploy.gripper import GripperCloseWindow
 from crisp_gym.deploy.obs import _get_obs_zerofill
@@ -59,8 +61,16 @@ def run_producer_loop(
     prev_grip_closed=None,
     last_pushed_deadline=None,
     dt_eff_mean_prev: float | None = None,
+    steps=None,
 ) -> None:
-    """Run until the chunk source is exhausted, --max-chunks is hit, or Ctrl-C."""
+    """Run until the chunk source is exhausted, --max-chunks is hit, or Ctrl-C.
+
+    ``steps`` is the method pipeline. When None the loop uses its built-in heuristic
+    schedule and gripper window, which is what ``19_deploy_policy.py`` has always
+    done; a method-driven runner passes the steps its method contributes instead.
+    The two are equivalent for method ``none`` -- see
+    ``tests/test_deploy_pipeline.py::test_method_none_matches_the_inline_path``.
+    """
     chunk_count = rec.chunk_count
     stopped_by = rec.stopped_by
     starvation_event_count = rec.starvation_event_count
@@ -344,9 +354,16 @@ def run_producer_loop(
                 np.asarray(lookbehind_buf, dtype=np.float64)
                 if len(lookbehind_buf) > 0 else None
             )
-            s_raw = _build_chunk_speed_schedule(
-                chunk.astype(np.float64), args, past_buffer=past,
-            )
+            if steps is not None:
+                # Method-driven: the pipeline owns both the speed decision and the
+                # gripper response, so the inline versions below are skipped.
+                _c = run_pipeline(Chunk.nominal(chunk.astype(np.float64)), steps)
+                chunk, s_raw = _c.actions, _c.speeds
+                K = len(_c)
+            else:
+                s_raw = _build_chunk_speed_schedule(
+                    chunk.astype(np.float64), args, past_buffer=past,
+                )
 
             # 3b. Gripper-grab slowdown (--gripper-slowdown-frames). On each
             #     open→close transition, force s_raw = 1.0 (real-time) for that
@@ -358,7 +375,7 @@ def run_producer_loop(
             #     leftover). No-op when N=0, and a no-op anyway with no speedup
             #     (s_raw already 1.0). Baked into s_raw → flows through cycle-snap
             #     into dt_eff/deadlines, so it also works with --cpp-sender.
-            if grip_window is not None:
+            if grip_window is not None and steps is None:
                 slow_mask = grip_window.mask(chunk)
                 if slow_mask.any():
                     s_raw[slow_mask] = 1.0

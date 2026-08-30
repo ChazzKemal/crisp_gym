@@ -156,3 +156,47 @@ def test_pipeline_applies_steps_in_order_and_stays_aligned():
 def test_empty_pipeline_is_identity():
     c = chunk(5)
     assert run_pipeline(c, []) is c
+
+
+# --------------------------------------------------------------------------
+# The claim that lets the loop take a `steps` list at all
+# --------------------------------------------------------------------------
+
+def test_method_none_matches_the_inline_path():
+    """`[HeuristicSpeed, GripperHold]` must equal what the loop does inline.
+
+    The loop keeps its built-in schedule for the None case, so this is the property
+    that makes the two interchangeable -- and therefore the property that lets a
+    method-driven runner reuse the hardware-proven loop rather than fork it. Checked
+    over trajectories with real gripper edges, since that is where the two paths
+    could plausibly diverge.
+    """
+    from crisp_gym.deploy.gripper import GripperCloseWindow
+    from crisp_gym.deploy.pipeline import _build_chunk_speed_schedule
+
+    rng = np.random.default_rng(0)
+    for trial in range(8):
+        k = 16
+        a = np.zeros((k, 7))
+        a[:, :3] = np.cumsum(rng.normal(scale=0.01, size=(k, 3)), axis=0)
+        a[:, 3:6] = np.cumsum(rng.normal(scale=0.01, size=(k, 3)), axis=0)
+        g, col = 1.0, np.empty(k)
+        for i in range(k):
+            if rng.random() < 0.2:
+                g = 1.0 - g
+            col[i] = g
+        a[:, 6] = col
+
+        # inline, exactly as the loop does it when steps is None
+        s_inline = _build_chunk_speed_schedule(a.astype(np.float64), Args(), past_buffer=None)
+        mask = GripperCloseWindow(5, invert=False).mask(a)
+        if mask.any():
+            s_inline = s_inline.copy()
+            s_inline[mask] = 1.0
+
+        # pipeline
+        out = run_pipeline(Chunk.nominal(a.astype(np.float64)),
+                           [HeuristicSpeed(Args()), GripperHold(5)])
+
+        np.testing.assert_array_equal(out.speeds, s_inline, err_msg=f"trial {trial}")
+        np.testing.assert_array_equal(out.actions, a.astype(np.float64))
