@@ -11,8 +11,12 @@ speed decision takes, which is why PACE can be dropped in here without the loop
 knowing anything about it.
 """
 
+from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
+
 import numpy as np
 
+from crisp_gym.deploy.gripper import GripperCloseWindow, GripperMotionRun
 from crisp_gym.deploy.timing import (
     compute_speed_schedule,
     compute_speed_schedule_cumangle,
@@ -160,3 +164,140 @@ def _build_chunk_speed_schedule(
 
 
 import subprocess  # noqa: E402  (close to point of use; rest of imports at top)
+
+
+# ---------------------------------------------------------------------------
+# The method seam: an ordered list of steps that reshape a chunk.
+#
+# A method contributes steps; the loop runs them and knows nothing else about it.
+# The dividing line is: a step transforms the chunk's *contents*, while the loop
+# owns time, queueing, and when to ask the policy for more. Seam blending and the
+# speed schedule are steps; the overlap threshold and deadline anchoring are not.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Chunk:
+    """One chunk on its way from the policy to the sender.
+
+    ``speeds`` travels with ``actions`` rather than beside it because steps change
+    the *row count* -- replication inserts rows, striding and blending remove them --
+    and every such step must keep per-row data aligned. Splitting them across two
+    containers makes that an invariant somebody has to remember; here it is a local
+    operation on one object. An off-by-one between the two would mean every action
+    executing at its neighbour's speed, silently.
+
+    ``speeds`` is deliberately not optional. 1.0 is a positive statement -- run at
+    the nominal control period -- not a placeholder for "unset", and for demospeedup
+    it is a *required* value: the demonstration is already compressed in the weights,
+    so also compressing time applies the speedup twice.
+    """
+
+    actions: np.ndarray          # (K, D), absolute [x, y, z, r0, r1, r2, grip]
+    speeds: np.ndarray           # (K,), multiplier on the nominal control period
+
+    def __post_init__(self):
+        if self.actions.ndim != 2:
+            raise ValueError(f"actions must be (K, D); got {self.actions.shape}")
+        if self.speeds.shape != (self.actions.shape[0],):
+            raise ValueError(
+                f"speeds {self.speeds.shape} must be (K,) for actions "
+                f"{self.actions.shape} -- a mismatch means actions execute at the "
+                "wrong speeds rather than raising later"
+            )
+
+    @classmethod
+    def nominal(cls, actions: np.ndarray) -> "Chunk":
+        """A chunk at speed 1.0 throughout -- what a method receives."""
+        actions = np.asarray(actions)
+        return cls(actions=actions, speeds=np.ones(actions.shape[0], dtype=np.float64))
+
+    def __len__(self) -> int:
+        return self.actions.shape[0]
+
+
+@runtime_checkable
+class DeployStep(Protocol):
+    """Anything that reshapes a chunk. Methods are lists of these."""
+
+    def __call__(self, chunk: Chunk) -> Chunk: ...
+
+
+def run_pipeline(chunk: Chunk, steps) -> Chunk:
+    """Apply steps in order. The loop's entire knowledge of methods."""
+    for step in steps:
+        chunk = step(chunk)
+    return chunk
+
+
+class HeuristicSpeed:
+    """The curvature schedule the deploy path has always used -- method ``none``.
+
+    Wraps :func:`_build_chunk_speed_schedule` unchanged, so the default behaviour of
+    a method-driven run is bit-identical to the pre-method one.
+    """
+
+    def __init__(self, args, past_buffer=None):
+        self.args = args
+        self.past_buffer = past_buffer
+
+    def __call__(self, chunk: Chunk) -> Chunk:
+        s = _build_chunk_speed_schedule(
+            chunk.actions.astype(np.float64), self.args, past_buffer=self.past_buffer,
+        )
+        return Chunk(actions=chunk.actions, speeds=np.asarray(s, dtype=np.float64))
+
+
+class GripperHold:
+    """Pin speed to 1.0 near an open->close edge -- pays for the grasp in *time*.
+
+    Used by ``none`` and ``pace``, which compress time; ``demospeedup`` compressed
+    waypoints instead and so pays in rows (see :class:`GripperReplicate`). Same
+    physical operation, each method's own currency.
+    """
+
+    def __init__(self, n_frames: int, *, invert: bool = False):
+        self.window = GripperCloseWindow(n_frames, invert=invert)
+
+    def __call__(self, chunk: Chunk) -> Chunk:
+        mask = self.window.mask(chunk.actions)
+        if not mask.any():
+            return chunk
+        speeds = chunk.speeds.copy()
+        speeds[mask] = 1.0
+        return Chunk(actions=chunk.actions, speeds=speeds)
+
+
+class GripperReplicate:
+    """Repeat **each** row of a gripper-motion run ``low_v`` times.
+
+    Not one row repeated ``low_v`` times: that would freeze the arm at a single pose
+    and then jump. The arm is usually still moving during a grasp, so repeating every
+    row keeps it on the identical path at ``1/low_v`` pace -- which is exactly the
+    inverse of the stride demospeedup applied to those frames at training time.
+
+    ``low_v`` rather than ``high_v`` because the entropy labelling marks grasp moments
+    as *precision* regions, and precision regions were strided by ``low_v``. What was
+    removed there is what gets put back.
+
+    The chunk grows. That is intentional: the inference deadline is
+    ``overlap_threshold x dt_eff``, which does not contain K, so a longer chunk costs
+    nothing there -- while truncating back to K would pay for gripper time by dropping
+    arm motion from the tail, and would compound with the blend's own hold-back.
+    """
+
+    def __init__(self, low_v: int, *, eps: float = 1e-3):
+        if low_v < 1:
+            raise ValueError(f"low_v must be >= 1; got {low_v}")
+        self.low_v = int(low_v)
+        self.run = GripperMotionRun(eps=eps)
+
+    def __call__(self, chunk: Chunk) -> Chunk:
+        if self.low_v == 1:
+            return chunk
+        mask = self.run.mask(chunk.actions)
+        if not mask.any():
+            return chunk
+        reps = np.where(mask, self.low_v, 1)
+        idx = np.repeat(np.arange(len(chunk)), reps)
+        return Chunk(actions=chunk.actions[idx], speeds=chunk.speeds[idx])
