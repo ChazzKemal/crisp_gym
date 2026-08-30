@@ -54,6 +54,22 @@ logger = logging.getLogger(__name__)
 # Setup segment.
 _SETUP_SIZE              = 8192
 _SETUP_COMPLETE_OFF      = 0
+# Layout guard. Every offset in this file is duplicated by hand in
+# clearpath_remote_ws/.../src/crisp_sender.cpp -- two lists in two languages that
+# agree only because someone typed the same numbers twice. Nothing verified that,
+# which was harmless while both shipped from one tree and were rebuilt together.
+# Once crisp_gym is pinned by SHA and clearpath_remote_ws moves independently they
+# can drift, and the failure is silent: insert one field mid-struct and Python
+# writes the deadline where C++ reads the pose, so the arm goes to a nonsense
+# absolute position with no error.
+#
+# So the "setup complete" flag doubles as a layout stamp: instead of 1, Python
+# writes MAGIC<<32 | VERSION and C++ requires that exact value. No new offsets --
+# deliberately, since a new offset is itself another number to keep in sync.
+# BUMP THE VERSION whenever any offset or slot size in this file changes.
+_SHM_LAYOUT_MAGIC        = 0x43535044   # "CSPD", crisp sender protocol
+_SHM_LAYOUT_VERSION      = 1
+_SETUP_COMPLETE_VALUE    = (_SHM_LAYOUT_MAGIC << 32) | _SHM_LAYOUT_VERSION
 _SETUP_READY_OFF         = 56   # C++ sets after rclcpp init + publisher discovery
 _SETUP_KP_EXP_OFF        = 8
 _SETUP_KD_EXP_OFF        = 16
@@ -322,8 +338,11 @@ class CppSenderHandle:
             slot_off = _SETUP_PARAMS_OFF + i * _SETUP_PARAM_SLOT_SIZE
             _pack_cstr(self._setup_mm, slot_off, name, 64)
             struct.pack_into("<d", self._setup_mm, slot_off + 64, orig)
-        # Last: bump complete flag so the C++ side proceeds.
-        struct.pack_into("<Q", self._setup_mm, _SETUP_COMPLETE_OFF, 1)
+        # Last: stamp the layout version, which also releases the C++ side.
+        # A mismatch here is refused by crisp_sender rather than producing motion
+        # from misread bytes.
+        struct.pack_into("<Q", self._setup_mm, _SETUP_COMPLETE_OFF,
+                         _SETUP_COMPLETE_VALUE)
 
         # Neuter scaler.step_to so the producer's existing cycle-change
         # detection still fires step_to(...) but the Python method is now

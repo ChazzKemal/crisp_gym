@@ -68,6 +68,7 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Float32, Float64MultiArray
 from scipy.spatial.transform import Rotation
 
+from crisp_gym.deploy.sender import TargetItem, TargetSenderThread
 from crisp_gym.deploy.timing import (
     CONTROL_DT,
     build_speed_queue_arrays,
@@ -115,8 +116,6 @@ DEFAULT_GRIPPER_SPEED = _replay17.DEFAULT_GRIPPER_SPEED
 GRIPPER_MAX_SPEED_MPS = _replay17.GRIPPER_MAX_SPEED_MPS
 SPEED_CMDS_TOPIC = _replay17.SPEED_CMDS_TOPIC
 _spawn_gripper_speed_controller = _replay17._spawn_gripper_speed_controller
-TargetItem = _replay17.TargetItem
-TargetSenderThread = _replay17.TargetSenderThread
 ReplayScaler = _replay17.ReplayScaler
 enable_target_pose_publishing = _replay17.enable_target_pose_publishing
 fix_gripper_self_subscription = _replay17.fix_gripper_self_subscription
@@ -1301,7 +1300,7 @@ def _build_chunk_speed_schedule(
 #
 # The binary lives at clearpath_remote_ws/install/tum09_custom/lib/
 #   tum09_custom/crisp_video_recorder after `colcon build`. We discover it
-#   the same way cpp_sender_handle does: try the known install path, fall
+#   the same way crisp_gym.deploy.cpp_sender does: try the known install path,
 #   back to `ros2 run` if that fails.
 # ---------------------------------------------------------------------------
 
@@ -1312,7 +1311,7 @@ import subprocess  # noqa: E402  (close to point of use; rest of imports at top)
 def _find_crisp_video_recorder_binary() -> list[str]:
     """Return argv prefix to launch crisp_video_recorder.
 
-    Mirrors cpp_sender_handle._build_subprocess_argv discovery: prefer the
+    Mirrors crisp_gym.deploy.cpp_sender._build_subprocess_argv discovery: prefer
     known install path, fall back to `ros2 run tum09_custom ...` which
     works if the user has the workspace setup.bash sourced.
     """
@@ -2396,7 +2395,7 @@ def main() -> int:
     # ---- Phase 3: start sender (Python thread or C++ subprocess) ----
     replay_log: list[dict] = []
     if args.cpp_sender:
-        from cpp_sender_handle import CppSenderHandle
+        from crisp_gym.deploy.cpp_sender import CppSenderHandle
         gripper_topic = None
         if gripper_enabled and not args.gripper_direct_action:
             gripper_topic = "/target_gripper_state"
