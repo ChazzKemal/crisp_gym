@@ -65,3 +65,21 @@ def test_run_record_defaults_allow_partial_construction():
 def test_write_run_artifacts_signature_is_stable():
     assert list(inspect.signature(write_run_artifacts).parameters) == \
         ["rec", "args", "sender", "shadow_policy"]
+
+
+def test_cpp_sender_startup_error_surfaces_the_reason(tmp_path):
+    """A failed handshake must say why, not just 'exited with code 1'."""
+    from crisp_gym.deploy.cpp_sender import _tail_stderr
+    log = tmp_path / "e.log"
+    log.write_text("noise\n\ncrisp_sender fatal: shared-memory layout version "
+                   "mismatch: producer speaks v2, this binary was built for v1\n")
+    out = _tail_stderr(log)
+    assert "layout version mismatch" in out
+    assert "v2" in out and "v1" in out
+
+
+def test_tail_stderr_never_raises_on_the_failure_path(tmp_path):
+    from crisp_gym.deploy.cpp_sender import _tail_stderr
+    assert "unavailable" in _tail_stderr(tmp_path / "missing.log")
+    empty = tmp_path / "empty.log"; empty.write_text("")
+    assert "nothing" in _tail_stderr(empty)

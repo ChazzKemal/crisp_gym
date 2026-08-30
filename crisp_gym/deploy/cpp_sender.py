@@ -150,6 +150,24 @@ def _pack_cstr(mm: mmap.mmap, off: int, s: str, max_len: int) -> None:
     mm[off : off + max_len] = data + b"\x00" * (max_len - len(data))
 
 
+def _tail_stderr(path, n: int = 6) -> str:
+    """Last few lines of the subprocess log, for the exception message.
+
+    Without this the caller is told only "exited with code 1" and has to go find the
+    log -- while the reason is usually a single decisive line, e.g. a shared-memory
+    layout mismatch naming both versions. Surfacing it inline turns a two-step
+    diagnosis into a one-step one, and this runs on a path that has already failed,
+    so it must never raise on its own.
+    """
+    try:
+        lines = [ln.rstrip() for ln in open(path).read().splitlines() if ln.strip()]
+    except OSError:
+        return "    (stderr log unavailable)"
+    if not lines:
+        return "    (subprocess wrote nothing to stderr)"
+    return "\n".join("    " + ln for ln in lines[-n:])
+
+
 class CppSenderHandle:
     """C++ subprocess sender; quacks like TargetSenderThread."""
 
@@ -364,9 +382,9 @@ class CppSenderHandle:
         while time.monotonic() < deadline:
             if self._proc.poll() is not None:
                 raise RuntimeError(
-                    f"crisp_sender subprocess exited during startup "
-                    f"with code {self._proc.returncode}; see "
-                    f"{self._stderr_log_path}"
+                    f"crisp_sender subprocess exited during startup with code "
+                    f"{self._proc.returncode}:\n{_tail_stderr(self._stderr_log_path)}\n"
+                    f"(full log: {self._stderr_log_path})"
                 )
             ready = struct.unpack_from("<Q", self._setup_mm, _SETUP_READY_OFF)[0]
             if ready:
