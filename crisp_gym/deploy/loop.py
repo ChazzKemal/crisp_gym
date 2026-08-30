@@ -24,6 +24,7 @@ from crisp_gym.deploy.pipeline import (
     _build_chunk_speed_schedule,
     _inpaint_blend_into_history,
 )
+from crisp_gym.deploy.gripper import GripperCloseWindow
 from crisp_gym.deploy.obs import _get_obs_zerofill
 from crisp_gym.deploy.sender import TargetItem
 from crisp_gym.deploy.sources import DatasetExhausted
@@ -74,6 +75,15 @@ def run_producer_loop(
     shadow_action_history = rec.shadow_action_history
     if dt_eff_mean_prev is None:
         dt_eff_mean_prev = dt_base
+
+    # One detector for the whole run; it owns the cross-chunk carry that used to
+    # live in two loop locals. Seeded from the caller so the contract is unchanged.
+    _n_slow = int(getattr(args, "gripper_slowdown_frames", 0))
+    grip_window = None
+    if _n_slow > 0 and gripper_enabled:
+        grip_window = GripperCloseWindow(_n_slow, invert=bool(args.invert_gripper))
+        grip_window.remaining = int(close_slow_remaining)
+        grip_window.prev_closed = prev_grip_closed
 
     try:
         logger.info(
@@ -348,30 +358,8 @@ def run_producer_loop(
             #     leftover). No-op when N=0, and a no-op anyway with no speedup
             #     (s_raw already 1.0). Baked into s_raw → flows through cycle-snap
             #     into dt_eff/deadlines, so it also works with --cpp-sender.
-            N_grip_slow = int(getattr(args, "gripper_slowdown_frames", 0))
-            if N_grip_slow > 0 and gripper_enabled:
-                g_norm = np.clip(chunk[:, 6], 0.0, 1.0)
-                if args.invert_gripper:
-                    g_norm = 1.0 - g_norm
-                closed = g_norm < 0.5  # commanded "closed" (post-invert)
-                slow_mask = np.zeros(K, dtype=bool)
-                # Carry-in: window opened by a close near a prior chunk's end.
-                if close_slow_remaining > 0:
-                    c = min(close_slow_remaining, K)
-                    slow_mask[:c] = True
-                    close_slow_remaining -= c
-                # New open→close edges this chunk (prev_grip_closed seeds frame 0).
-                was_closed = (
-                    bool(prev_grip_closed) if prev_grip_closed is not None else False
-                )
-                for i in range(K):
-                    if closed[i] and not was_closed:  # open→close edge = a grab
-                        end = i + N_grip_slow
-                        slow_mask[i:min(end, K)] = True
-                        if end > K:
-                            close_slow_remaining = max(close_slow_remaining, end - K)
-                    was_closed = bool(closed[i])
-                prev_grip_closed = bool(closed[-1])
+            if grip_window is not None:
+                slow_mask = grip_window.mask(chunk)
                 if slow_mask.any():
                     s_raw[slow_mask] = 1.0
 
