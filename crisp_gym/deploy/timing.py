@@ -374,3 +374,58 @@ def build_speed_queue_arrays(
     dt_eff = cycles.astype(np.float64) * CONTROL_DT
     s_eff = dt_base / dt_eff
     return cycles, dt_eff, s_eff
+
+
+# ---------------------------------------------------------------------------
+# Producer loop
+# ---------------------------------------------------------------------------
+
+
+def _pre_compute_chunk_arrays(
+    chunk: np.ndarray,
+    *,
+    args,
+    gripper_enabled: bool,
+    gripper_unnormalize_fn,
+    rotation_from_action,
+):
+    """Same conversions as DatasetProducer._build_arrays, but for a live chunk.
+
+    Returns (target_xyz, target_quat, grip_raw, actions_f32) all length K.
+    Action convention (matches recorded datasets): [x, y, z, <rot>, grip]
+    with grip in [0, 1] (crisp_py: 1=open, 0=closed). The grip channel is
+    binarized (snapped to 0.0 / 1.0 at the 0.5 midpoint) before
+    unnormalization so deployment never commands a partial grip.
+
+    ``rotation_from_action`` maps the action's rotation slots (``action[3:6]``)
+    to a scipy Rotation. It is ``env.action_to_rotation``, so the orientation
+    representation is read from the env config rather than hardcoded — a
+    policy trained on angle-axis just needs the env yaml set to
+    ``orientation_representation: "angle_axis"``.
+
+    NOTE: this assumes a 3-element rotation (euler OR angle_axis), so the
+    action layout is [x, y, z, r0, r1, r2, grip] (7 dims). The QUATERNION
+    representation has a 4-element rotation (8-dim action, grip at index 7);
+    supporting it here would need the rotation slice + gripper index widened.
+    Not handled because no quaternion-action policy exists in this repo yet.
+    """
+    K = chunk.shape[0]
+    actions = chunk.astype(np.float64, copy=False)
+    target_xyz = actions[:, :3].copy()
+    target_quat = np.zeros((K, 4), dtype=np.float64)
+    grip_raw = np.zeros(K, dtype=np.float64)
+    actions_f32 = actions.astype(np.float32)
+    for k in range(K):
+        target_quat[k] = rotation_from_action(actions[k, 3:6]).as_quat()
+        if gripper_enabled and gripper_unnormalize_fn is not None:
+            g = float(np.clip(actions[k, 6], 0.0, 1.0))
+            if args.invert_gripper:
+                g = 1.0 - g
+            # Binarize the gripper command: the policy's continuous output is
+            # snapped to fully open / fully closed so deployment never holds a
+            # partial grip. Threshold is the 0.5 midpoint of the [0, 1] range;
+            # g >= 0.5 -> 1.0 (open), else 0.0 (closed). Applied after
+            # --invert-gripper so the open/close direction stays correct.
+            g = 1.0 if g >= 0.5 else 0.0
+            grip_raw[k] = float(gripper_unnormalize_fn(g))
+    return target_xyz, target_quat, grip_raw, actions_f32
