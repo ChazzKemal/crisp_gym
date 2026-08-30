@@ -49,6 +49,7 @@ class RunRecord:
     shadow_action_history: Any = None
     shadow_inpaint_blend_total: int = 0
     shadow_inpaint_delta_sum: float = 0.0
+    shadow_policy: Any = None
 
 
 def write_run_artifacts(rec: RunRecord, args, sender, shadow_policy) -> None:
