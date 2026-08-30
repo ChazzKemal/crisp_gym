@@ -51,7 +51,6 @@ Prerequisites:
 
 import argparse
 import csv
-import importlib.util
 import json
 import logging
 import queue
@@ -68,6 +67,23 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Float32, Float64MultiArray
 from scipy.spatial.transform import Rotation
 
+from crisp_gym.deploy.dataset import (
+    LEROBOT_CACHE,
+    load_dataset_info,
+    load_episode_frames,
+    load_episodes_meta,
+)
+from crisp_gym.deploy.gains import (
+    DEFAULT_GRIPPER_SPEED,
+    GRIPPER_MAX_SPEED_MPS,
+    SPEED_CMDS_TOPIC,
+    ReplayScaler,
+    _spawn_gripper_speed_controller,
+)
+from crisp_gym.deploy.patches import (
+    enable_target_pose_publishing,
+    fix_gripper_self_subscription,
+)
 from crisp_gym.deploy.sender import TargetItem, TargetSenderThread
 from crisp_gym.deploy.timing import (
     CONTROL_DT,
@@ -82,49 +98,6 @@ from crisp_gym.util.setup_logger import setup_logging
 
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Reuse the speedup substrate from 17_replay_dataset.py
-#
-# 17_*.py is a numbered example file; the leading digit means we can't
-# `import` it directly (not a valid Python identifier). Load it via importlib
-# so we share TargetSenderThread / TargetItem / ReplayScaler / cycle-snap
-# helpers instead of duplicating ~400 lines. The user's instructions are to
-# keep the new code inline in examples/, not extract a shared module yet.
-# ---------------------------------------------------------------------------
-
-_REPLAY17_PATH = Path(__file__).parent / "17_replay_dataset.py"
-
-
-def _load_replay17():
-    spec = importlib.util.spec_from_file_location("replay17", _REPLAY17_PATH)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"failed to locate 17_replay_dataset.py at {_REPLAY17_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_replay17 = _load_replay17()
-
-# Names that have been extracted into the installable library come from there
-# directly -- NOT re-exported through 17's namespace. Every extraction step of
-# the crisp_gym/deploy/ move shortens the block below; when it is empty, this
-# whole importlib shim goes away and 19 becomes a thin front (plan step 2.7).
-DEFAULT_GRIPPER_SPEED = _replay17.DEFAULT_GRIPPER_SPEED
-GRIPPER_MAX_SPEED_MPS = _replay17.GRIPPER_MAX_SPEED_MPS
-SPEED_CMDS_TOPIC = _replay17.SPEED_CMDS_TOPIC
-_spawn_gripper_speed_controller = _replay17._spawn_gripper_speed_controller
-ReplayScaler = _replay17.ReplayScaler
-enable_target_pose_publishing = _replay17.enable_target_pose_publishing
-fix_gripper_self_subscription = _replay17.fix_gripper_self_subscription
-
-# Dataset loaders (reused for --fake-mode dataset).
-LEROBOT_CACHE = _replay17.LEROBOT_CACHE
-load_dataset_info = _replay17.load_dataset_info
-load_episodes_meta = _replay17.load_episodes_meta
-load_episode_frames = _replay17.load_episode_frames
 
 
 # ---------------------------------------------------------------------------
