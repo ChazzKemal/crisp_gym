@@ -92,8 +92,15 @@ sys.exit(1 if bad else 0)
 PY
 then ok "all policy names"; else bad "a policy name did not resolve"; fi
 
+echo "[6] unit tests (pure-numpy deploy math, no robot)"
+if "$PYTHON" -m pytest tests/ -q >/dev/null 2>&1; then
+    ok "pytest tests/"
+else
+    bad "pytest tests/ -- run '\''$PYTHON -m pytest tests/ -q'\'' to see why"
+fi
+
 if [ "${1:-}" = "--wheel" ]; then
-    echo "[6] wheel ships the bundled YAML and the deploy-path modules"
+    echo "[7] wheel ships the bundled YAML and the deploy-path modules"
     tmp=$(mktemp -d)
     if "$PYTHON" -m pip wheel --no-deps --no-build-isolation -w "$tmp" . >/dev/null 2>&1 \
        && "$PYTHON" -c "

@@ -68,6 +68,12 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Float32, Float64MultiArray
 from scipy.spatial.transform import Rotation
 
+from crisp_gym.deploy.timing import (
+    CONTROL_DT,
+    build_speed_queue_arrays,
+    compute_speed_schedule,
+    compute_speed_schedule_cumangle,
+)
 from crisp_gym.envs.manipulator_env import make_env
 from crisp_gym.envs.manipulator_env_config import OrientationRepresentation
 from crisp_gym.policy.async_lerobot_policy import AsyncLerobotPolicy
@@ -101,7 +107,10 @@ def _load_replay17():
 
 _replay17 = _load_replay17()
 
-CONTROL_DT = _replay17.CONTROL_DT
+# Names that have been extracted into the installable library come from there
+# directly -- NOT re-exported through 17's namespace. Every extraction step of
+# the crisp_gym/deploy/ move shortens the block below; when it is empty, this
+# whole importlib shim goes away and 19 becomes a thin front (plan step 2.7).
 DEFAULT_GRIPPER_SPEED = _replay17.DEFAULT_GRIPPER_SPEED
 GRIPPER_MAX_SPEED_MPS = _replay17.GRIPPER_MAX_SPEED_MPS
 SPEED_CMDS_TOPIC = _replay17.SPEED_CMDS_TOPIC
@@ -109,9 +118,6 @@ _spawn_gripper_speed_controller = _replay17._spawn_gripper_speed_controller
 TargetItem = _replay17.TargetItem
 TargetSenderThread = _replay17.TargetSenderThread
 ReplayScaler = _replay17.ReplayScaler
-build_speed_queue_arrays = _replay17.build_speed_queue_arrays
-compute_speed_schedule = _replay17.compute_speed_schedule
-compute_speed_schedule_cumangle = _replay17.compute_speed_schedule_cumangle
 enable_target_pose_publishing = _replay17.enable_target_pose_publishing
 fix_gripper_self_subscription = _replay17.fix_gripper_self_subscription
 
