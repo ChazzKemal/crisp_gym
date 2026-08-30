@@ -5,6 +5,7 @@ from crisp_gym.policy.policy import Policy, make_policy, register_policy
 __all__ = [
     "LerobotPolicy",
     "AsyncLerobotPolicy",
+    "AsyncSmolVLAPolicy",
     "Policy",
     "register_policy",
     "make_policy",
@@ -20,4 +21,9 @@ def __getattr__(name: str):
     if name == "LerobotPolicy":
         from crisp_gym.policy.lerobot_policy import LerobotPolicy
         return LerobotPolicy
+    if name == "AsyncSmolVLAPolicy":
+        # Needs the RTC-capable LeRobot fork; kept lazy so importing this package
+        # does not require it.
+        from crisp_gym.policy.async_smolvla_policy import AsyncSmolVLAPolicy
+        return AsyncSmolVLAPolicy
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -553,6 +553,36 @@ def _forward_window_sum(values: np.ndarray, n: int) -> np.ndarray:
     return np.stack(shifted, axis=0).sum(axis=0)                  # (T,)
 
 
+def _centered_window_sum(
+    values: np.ndarray, n_past: int, n_future: int,
+) -> np.ndarray:
+    """Centered-window sum of length n_past + n_future + 1, edge-padded both ends.
+
+    For each timestep t, returns sum(values[t - n_past .. t + n_future]) with
+    edge replication outside the array. n_past=0 reduces exactly to
+    _forward_window_sum(values, n_future); n_future=0 is the time-reversed
+    counterpart. Used by compute_speed_schedule to symmetrize the
+    lookahead window so the arm stays slow on the EXIT of a curve, not just
+    the entry.
+    """
+    n_past = max(0, int(n_past))
+    n_future = max(0, int(n_future))
+    if n_past == 0 and n_future == 0:
+        return values.astype(np.float64, copy=True)
+    shifted = [values.astype(np.float64, copy=True)]
+    for k in range(1, n_future + 1):
+        s = np.empty_like(values, dtype=np.float64)
+        s[:-k] = values[k:]
+        s[-k:] = values[-1]                                       # edge-pad right
+        shifted.append(s)
+    for k in range(1, n_past + 1):
+        s = np.empty_like(values, dtype=np.float64)
+        s[k:] = values[:-k]
+        s[:k] = values[0]                                         # edge-pad left
+        shifted.append(s)
+    return np.stack(shifted, axis=0).sum(axis=0)                  # (T,)
+
+
 def compute_speed_schedule(
     actions: np.ndarray,
     *,
@@ -560,6 +590,7 @@ def compute_speed_schedule(
     min_speed: float = 1.0,
     clamp_deg: float = 5.0,
     n_lookahead: int = 0,
+    n_lookbehind: int = 0,
 ) -> np.ndarray:
     """Per-frame speed factor in [min_speed, max_speed] for an absolute trajectory.
 
@@ -570,6 +601,10 @@ def compute_speed_schedule(
     replaced by the cumulative_bending factor over the next ``n_lookahead+1``
     steps (xVLA L811-824); the orientation channel is left raw because
     rotation magnitude has no per-step bending interpretation (L825-827).
+    ``n_lookbehind > 0`` extends the window symmetrically backwards so the
+    arm stays slow on the EXIT of a curve, not just the entry — the window
+    length becomes ``n_lookbehind + n_lookahead + 1`` and the normalization
+    grows in lockstep.
 
     Designed to be called once per recorded episode (replay) or once per
     generated chunk (future live policy).
@@ -589,10 +624,10 @@ def compute_speed_schedule(
     angles = _per_step_angle(pos)
     speeds_ori = _speed_from_orientation_factors(ori, max_speed, min_speed, clamp_deg)
 
-    if n_lookahead > 0:
-        # cumulative_bending on the angle channel.
-        cum = _forward_window_sum(angles, n_lookahead)
-        denom = 90.0 * (n_lookahead + 1)
+    if n_lookahead > 0 or n_lookbehind > 0:
+        # cumulative_bending on the angle channel, symmetric window.
+        cum = _centered_window_sum(angles, n_lookbehind, n_lookahead)
+        denom = 90.0 * (n_lookbehind + n_lookahead + 1)
         factors = np.clip(denom - cum, 0.0, None) / denom
         speeds_coord = min_speed + (max_speed - min_speed) * factors
     else:
@@ -608,6 +643,7 @@ def compute_speed_schedule_cumangle(
     min_speed: float = 1.0,
     clamp_deg: float = 5.0,
     cum_window: int = 0,
+    n_lookbehind: int = 0,
 ) -> np.ndarray:
     """Cumulative-angle variant: factor = clip(90 - cum, 0) / 90.
 
@@ -621,6 +657,11 @@ def compute_speed_schedule_cumangle(
     Useful for chunks (policy deploy) where many sub-threshold direction
     changes within the window collectively warrant a slowdown that the
     averaging-lookahead path under-weights.
+
+    ``n_lookbehind > 0`` extends the cumulative window symmetrically into
+    the past so already-executed bends keep weighing on the current speed
+    factor; the denominator stays 90 by design (cumulative threshold, not
+    average).
     """
     if actions.ndim != 2 or actions.shape[1] < 6:
         raise ValueError(
@@ -640,7 +681,9 @@ def compute_speed_schedule_cumangle(
         ori, max_speed, min_speed, clamp_deg,
     )
 
-    cum = _forward_window_sum(angles, max(0, int(cum_window)))
+    cum = _centered_window_sum(
+        angles, max(0, int(n_lookbehind)), max(0, int(cum_window)),
+    )
     factors = np.clip(90.0 - cum, 0.0, None) / 90.0
     speeds_coord = min_speed + (max_speed - min_speed) * factors
 
@@ -654,6 +697,7 @@ def compute_speed_schedule_drop_holds(
     min_speed: float = 1.0,
     clamp_deg: float = 5.0,
     n_lookahead: int = 0,
+    n_lookbehind: int = 0,
     cum_window: int = 0,
     motion_eps: float = 1e-6,
 ) -> np.ndarray:
@@ -701,6 +745,7 @@ def compute_speed_schedule_drop_holds(
             min_speed=min_speed,
             clamp_deg=clamp_deg,
             cum_window=int(cum_window),
+            n_lookbehind=int(n_lookbehind),
         )
     else:
         s_mov = compute_speed_schedule(
@@ -709,6 +754,7 @@ def compute_speed_schedule_drop_holds(
             min_speed=min_speed,
             clamp_deg=clamp_deg,
             n_lookahead=int(n_lookahead),
+            n_lookbehind=int(n_lookbehind),
         )
 
     # For each original i, find the first moving index >= i. Held frames
@@ -908,24 +954,31 @@ class ReplayScaler:
                 )
 
         # 2. Spawn gripper_speed_controller and create the speed publisher.
-        ok, msg = _spawn_gripper_speed_controller(self.gripper_cm)
-        if not ok:
-            logger.warning(
-                "gripper speed controller spawn failed: %s. Gripper speed "
-                "will NOT be scaled (kp scaling still active).", msg,
-            )
-        else:
-            logger.info("gripper_speed_controller: %s", msg)
-            self._speed_pub = self.env.robot.node.create_publisher(
-                Float64MultiArray, SPEED_CMDS_TOPIC, qos_profile_system_default,
-            )
-            # Prime with the baseline so the controller is hot before the
-            # replay loop starts adjusting it. POST_SET_DELAY mirrors
-            # gripper_speed_test.py.
-            prime = Float64MultiArray()
-            prime.data = [float(self.base_gripper_speed)]
-            self._speed_pub.publish(prime)
-            time.sleep(0.3)
+        # TEMP_DISABLE_GRIPPER_SPEED: gripper_speed_controller adjustment is
+        # currently disabled. _speed_pub stays None (initialized at line 783),
+        # so the downstream `if self._speed_pub is not None` guards in
+        # step_to() and restore() automatically skip all gripper-speed
+        # publishes. To re-enable, change `if False:` back to `if True:`
+        # (or remove the gate).
+        if False:
+            ok, msg = _spawn_gripper_speed_controller(self.gripper_cm)
+            if not ok:
+                logger.warning(
+                    "gripper speed controller spawn failed: %s. Gripper speed "
+                    "will NOT be scaled (kp scaling still active).", msg,
+                )
+            else:
+                logger.info("gripper_speed_controller: %s", msg)
+                self._speed_pub = self.env.robot.node.create_publisher(
+                    Float64MultiArray, SPEED_CMDS_TOPIC, qos_profile_system_default,
+                )
+                # Prime with the baseline so the controller is hot before the
+                # replay loop starts adjusting it. POST_SET_DELAY mirrors
+                # gripper_speed_test.py.
+                prime = Float64MultiArray()
+                prime.data = [float(self.base_gripper_speed)]
+                self._speed_pub.publish(prime)
+                time.sleep(0.3)
 
         # 3. Apply the first-frame factor before replay starts so frame 0
         # doesn't pay the RPC latency inside the rate-limited loop.
@@ -1369,11 +1422,14 @@ class TargetSenderThread(threading.Thread):
 
                 # Gripper — action-client and raw-publish branches mirror
                 # the pre-refactor main loop. With edge-detect enabled
-                # (default), we only fire a NEW publish when the requested
-                # grip_raw moves more than `gripper_edge_eps` from the last
-                # value we actually sent. This stops the action server's
-                # per-publish preemption from continuously restarting the
-                # gripper's acceleration ramp; see __init__ comment.
+                # (default), the raw-publish (Float32) branch only fires a NEW
+                # publish when the requested grip_raw moves more than
+                # `gripper_edge_eps` from the last value we actually sent. This
+                # stops the action server's per-publish preemption from
+                # continuously restarting the gripper's acceleration ramp; see
+                # __init__ comment. The action-client (direct) branch is exempt
+                # — it re-sends every frame (continuous re-drive); see the elif
+                # condition below.
                 if item.grip_raw is not None:
                     grip_raw_f = float(item.grip_raw)
                     # A "change" = grip_raw moved more than edge_eps from the
@@ -1393,9 +1449,21 @@ class TargetSenderThread(threading.Thread):
                         # Hold last sent value; do not publish this change.
                         self.gripper_latch_blocked_count += 1
                         grip_latched = True
-                    elif is_change or not self._gripper_edge_detect:
-                        # Publish: a permitted change, OR a same-value re-send
-                        # when edge-detect is disabled (legacy per-tick behaviour).
+                    elif (
+                        is_change
+                        or not self._gripper_edge_detect
+                        or self._gripper_action_client is not None
+                    ):
+                        # Publish when: a permitted change, a same-value re-send
+                        # with edge-detect disabled (legacy per-tick), OR we're
+                        # on the action-client (direct) path — which ALWAYS
+                        # re-sends every frame so the gripper goal is driven
+                        # continuously, mirroring crisp_py's 30 Hz
+                        # /target_gripper_state relay. Without continuous
+                        # re-drive a direct-action command is single-shot on
+                        # edges; a chattering policy gripper channel then
+                        # preempts the in-flight Robotiq goal before the fingers
+                        # finish travelling and the grasp never completes.
                         _t_grip = time.perf_counter()
                         if self._gripper_action_client is not None:
                             goal = GripperCommand.Goal()
@@ -2051,6 +2119,15 @@ def main() -> None:
              "(default: 0).",
     )
     parser.add_argument(
+        "--lookbehind", type=int, default=0,
+        help="Adaptive speed scaling: backward-window size, symmetric "
+             "counterpart to --lookahead. Sums the previous M "
+             "direction-change angles into the same factor so the arm stays "
+             "slow on the EXIT of a curve, not just the entry. 0 = "
+             "forward-only (legacy behaviour). Window length becomes "
+             "M + N + 1 with the averaging denominator scaled in lockstep.",
+    )
+    parser.add_argument(
         "--drop-holds", action="store_true",
         help="Compute the speed schedule on moving frames only; held frames "
              "(zero-motion stalls — common in teleop recordings where the "
@@ -2210,11 +2287,13 @@ def main() -> None:
                 min_speed=args.min_speed,
                 clamp_deg=args.clamp_deg,
                 n_lookahead=args.lookahead,
+                n_lookbehind=args.lookbehind,
                 **extra,
             )
             schedule_mode = (
                 f"adaptive [{args.min_speed:.2f}-{args.max_speed:.2f}]x "
-                f"lookahead={args.lookahead} clamp_deg={args.clamp_deg:.1f}"
+                f"lookahead={args.lookahead} lookbehind={args.lookbehind} "
+                f"clamp_deg={args.clamp_deg:.1f}"
                 + (
                     f" drop_holds(eps={args.hold_eps:.0e})"
                     if args.drop_holds else ""

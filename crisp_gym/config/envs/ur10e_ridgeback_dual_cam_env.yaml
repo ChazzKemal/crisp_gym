@@ -1,0 +1,152 @@
+# UR10e on Clearpath Ridgeback — crisp_gym Cartesian env with BOTH cameras.
+#
+# Identical to ur10e_ridgeback_env.yaml except `camera_configs` lists two
+# cameras instead of one:
+#   - Orbbec Femto Bolt at /camera/...   (third-person, fixed mount)
+#   - Intel RealSense D405 at /d405/...  (wrist-mounted)
+#
+# ManipulatorEnv instantiates one `crisp_py.Camera` per list entry, each on
+# its own daemon spin thread. Recording (`16_camera_only_record.py`) will
+# automatically include both image streams in the LeRobot dataset under
+# `observation.images.<camera_name>` — so the entries' camera_name fields
+# determine the dataset key suffixes: `observation.images.camera` for the
+# Orbbec, `observation.images.d405` for the D405.
+#
+# Usage:
+#   pixi run -e jazzy-lerobot python examples/17_replay_dataset.py \
+#       --env-config ur10e_ridgeback_dual_cam_env ...
+#
+# Prerequisites — start BOTH cameras in separate terminals before launching:
+#   Terminal A:  cd clearpath_remote_ws && pixi run orbbec
+#   Terminal B:  cd clearpath_remote_ws && pixi run realsense
+#
+# Both launch files publish on disjoint namespaces (/camera vs /d405) so
+# there are no topic collisions; you can run them concurrently.
+#
+# GIL caveat: each Camera adds a daemon spin thread to the process; high-
+# rate image callbacks contend with the publish loop. For replay, prefer
+# `--no-camera` (destroys all camera subs in Phase 2e) unless you need
+# state-capture of the images. For deployment (`19_deploy_policy.py`),
+# images are required so don't disable.
+
+control_frequency: 20.0
+use_relative_actions: false       # absolute target poses
+
+# Consolidate Robot + Gripper + each Camera + each Sensor onto ONE
+# MultiThreadedExecutor + spin thread instead of the default 1-thread-per-
+# component. py-spy showed 100% of GIL-held samples in this env's deploy
+# were inside the per-component rclpy wait-set bookkeeping loops; merging
+# them eliminates that contention.
+use_shared_executor: true
+
+protected_controllers:
+  - safety_observer_controller
+
+orientation_representation: "euler"
+
+# --- Robot Config ---
+robot_config:
+  robot_type: "ur"
+  joint_names:
+    - arm_0_elbow_joint
+    - arm_0_shoulder_lift_joint
+    - arm_0_shoulder_pan_joint
+    - arm_0_wrist_1_joint
+    - arm_0_wrist_2_joint
+    - arm_0_wrist_3_joint
+  home_config: [1.57, -1.5708, 1.5708, -1.5708, -1.5708, 0]
+  base_frame: "arm_0_base_link"
+  target_frame: "arm_0_gripper_tcp"
+  default_controller: "cartesian_controller"
+  cartesian_impedance_controller_name: "cartesian_controller"
+  joint_trajectory_controller_name: "joint_trajectory_controller"
+  target_pose_topic: "target_pose"
+  current_pose_topic: "current_pose"
+  current_joint_topic: "joint_states"
+  publish_frequency: 20.0
+  publish_target_pose: false
+
+# --- Gripper Config ---
+gripper_config:
+  min_value: 0.8
+  max_value: 0.0
+  command_topic: "/gripper/gripper_controller/gripper_cmd"
+  joint_state_topic: "/gripper/joint_states"
+  target_state_topic: "/target_gripper_state"
+  use_gripper_command_action: true
+  index: 0
+  max_delta: 1.0
+
+gripper_mode: "absolute_continuous"
+
+# --- Camera Config ---
+# Order matters only for human readability — both are subscribed in parallel.
+# camera_name -> LeRobot dataset key suffix (observation.images.<name>).
+#
+# use_shared_memory: true on both cameras opts in to the SHM sidecar path
+# (see docs/troubleshooting_deploy_gil_contention.md). When true, this env
+# does NOT create ROS subscribers for the camera topics — instead it
+# mmaps /dev/shm/crisp_camera_<name> and reads decoded RGB frames written
+# by the `crisp_camera_bridge` sidecar (run alongside in a separate process:
+# `ros2 run tum09_custom crisp_camera_bridge.py --config <yaml>`).
+# This moves cv_bridge JPEG decode + DDS deserialize out of the deploy's
+# GIL, dropping sender-thread sleep_overshoot p99 from ~100 ms to ~1 ms
+# at training-realistic camera rates. The bridge MUST be running before
+# env.wait_until_ready() — otherwise the camera constructor raises
+# FileNotFoundError pointing at /dev/shm/crisp_camera_<name>.
+#
+# To run without the sidecar (legacy path), flip both flags back to false.
+camera_configs:
+  # Orbbec Femto Bolt — third-person view, fixed mount.
+  # Launched by: `pixi run orbbec` in clearpath_remote_ws.
+  - camera_name: "camera"
+    camera_frame: "camera_frame"
+    camera_color_image_topic: "/camera/color/image_raw"
+    camera_color_info_topic: "/camera/color/camera_info"
+    # [H, W] — matches crisp_py.Camera convention (rows then cols, HWC numpy).
+    # 480×640 is the native Orbbec/RealSense output and the LeRobot/ACT
+    # convention (640w × 480h landscape).
+    resolution: [480, 640]
+    max_image_delay: 1.0
+    use_shared_memory: true
+    # NOTE: lazy_decode=true was tried here and made performance much worse
+    # — it serialized both cameras' JPEG decode into the producer thread
+    # and concentrated GIL hold on the critical path. crisp_py's eager
+    # ReentrantCallbackGroup + MultiThreadedExecutor already parallelises
+    # decodes across callback threads. Keep eager (default). With
+    # use_shared_memory=true above, neither path runs in-process anyway.
+
+  # Intel RealSense D405 — wrist-mounted, close-range stereo + RGB.
+  # Launched by: `pixi run realsense` in clearpath_remote_ws.
+  # Note: D405 publishes rectified color as image_rect_raw (no image_raw
+  # variant); crisp_py subscribes to .../image_rect_raw/compressed.
+  # See also the standalone crisp_py config at config/cameras/d405_camera.yaml.
+  - camera_name: "d405"
+    camera_frame: "d405_color_optical_frame"
+    camera_color_image_topic: "/d405/camera/color/image_rect_raw"
+    camera_color_info_topic: "/d405/camera/color/camera_info"
+    # [H, W] landscape — same convention as the orbbec entry above.
+    resolution: [480, 640]
+    max_image_delay: 0.5
+    use_shared_memory: true
+
+sensor_configs: []
+
+cartesian_control_param_config: null
+joint_control_param_config: null
+
+# --- Safety workspace limits (arm_0_base_link frame, metres) ---
+min_z: 0.05
+max_z: 1.2
+min_x: -1.0
+max_x: 1.0
+min_y: -1.0
+max_y: 1.0
+
+# --- Observation keys included in observation.state ---
+observations_to_include_to_state:
+  - "observation.state.cartesian"
+  - "observation.state.joints"
+  - "observation.state.gripper"
+  - "observation.state.gripper_target"
+  - "observation.state.target"

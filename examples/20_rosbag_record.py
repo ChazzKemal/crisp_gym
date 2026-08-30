@@ -8,8 +8,9 @@ to write every received message to disk, so the resulting bag reflects
 what the DDS layer actually delivered — no recorder-loop downsampling,
 no shared-buffer race, no video re-encoding.
 
-Controls (same r/s/d/q scheme as `16_camera_only_record.py`):
+Controls (same r/s/d/q scheme as `16_camera_only_record.py`, plus `h`):
     r  →  start recording (first press) / stop recording (second press)
+    h  →  (between episodes) home the arm now, then keep waiting for `r`
     s  →  keep the just-recorded bag (queued for processing)
     d  →  discard the just-recorded bag (deletes the bag directory)
     q  →  quit (discards any paused bag, then processes queued bags)
@@ -37,6 +38,13 @@ streaming target poses before you press ``r``.
 Optional ``--rehome-each-episode`` repeats that home+switch after every
 episode (saved or discarded), before waiting for the next ``r``, so each
 episode starts from the home pose. It implies ``--go-home``.
+
+Without ``--rehome-each-episode`` every episode simply continues from
+wherever the previous one left the arm. Press ``h`` at the ``[waiting]``
+prompt to home on demand for the episodes where you do want a reset; the
+env is built lazily on the first ``h``, so this works even without
+``--go-home``. After any home, re-anchor your teleop source before ``r``
+(homing moves the arm away from the last commanded target).
 
 Pass ``--from-bag DIR`` to skip recording entirely and run steps 1–3
 on an existing bag.
@@ -591,6 +599,7 @@ INSTRUCTIONS = (
     "\n"
     "  Keys:\n"
     "    r  start / stop recording\n"
+    "    h  between episodes: home the arm now (then press 'r')\n"
     "    s  save the just-recorded bag (processed at end of session;\n"
     "       use --process-immediately to extract/convert inline instead)\n"
     "    d  discard the just-recorded bag (delete directory)\n"
@@ -616,6 +625,31 @@ def run_session(args: argparse.Namespace) -> None:
             logger.exception("--go-home failed; aborting session.")
             return
 
+    def _home_now(reason: str) -> bool:
+        """Home the arm + switch back to cartesian. Returns True on success.
+
+        The env is created lazily so 'h' also works in sessions started
+        without --go-home; `home_and_switch_to_cartesian` both builds it
+        and homes, so the first call needs no extra `env.home()`.
+        """
+        nonlocal env
+        _announce(f"[homing] {reason}")
+        try:
+            if env is None:
+                env = home_and_switch_to_cartesian(args.env_config)
+            else:
+                env.home(blocking=True)
+                env.switch_controller("cartesian")
+        except Exception:
+            logger.exception("Homing failed; arm left where it was.")
+            _announce("[homing] FAILED -- arm left where it was (see log).")
+            return False
+        _announce(
+            "[homing] done; back on cartesian_controller. "
+            "Re-anchor your teleop before pressing 'r'."
+        )
+        return True
+
     def _on_sigterm(signum, _frame):
         raise SystemExit(128 + signum)
     prev_sigterm = signal.signal(signal.SIGTERM, _on_sigterm)
@@ -636,33 +670,52 @@ def run_session(args: argparse.Namespace) -> None:
             # episode > 0 means a previous episode ran; the initial --go-home
             # already homed before the first one, so we only re-home here for
             # the 2nd episode onward. On quit the loop has already exited, so
-            # this never homes just to immediately stop.
-            if args.rehome_each_episode and episode > 0 and env is not None:
-                _announce("[homing] returning to home pose via JTC...")
-                try:
-                    env.home(blocking=True)
-                    env.switch_controller("cartesian")
-                    _announce("[homing] done; back on cartesian_controller.")
-                except Exception:
-                    logger.exception("Re-home failed; continuing anyway.")
+            # this never homes just to immediately stop. Without the flag we
+            # skip this entirely and the arm stays where the last episode
+            # left it -- press 'h' below for a one-off reset.
+            homed_for_this_episode = False
+            if args.rehome_each_episode and episode > 0:
+                homed_for_this_episode = _home_now(
+                    "auto re-home between episodes (--rehome-each-episode)..."
+                )
 
             # ---- waiting state ----
             # Intentionally do NOT flush the queue here: a key pressed during
             # the slow postprocess/lerobot block above (e.g. anticipatory 'r'
             # to start the next episode, or 'q' to quit) should be honored.
-            # Stale non-r/non-q chars are silently consumed by the inner loop
-            # below via `if ch != "r": continue`.
-            _announce(f"[waiting] press 'r' to start episode {episode + 1}, 'q' to quit.")
+            # Stale chars that are not r/h/q are silently consumed by the
+            # inner loop below.
+            def _waiting_prompt() -> None:
+                if homed_for_this_episode:
+                    where = "from the home pose"
+                elif episode > 0:
+                    where = "from where the last episode left off"
+                else:
+                    where = "from the current arm pose"
+                _announce(
+                    f"[waiting] 'r' start episode {episode + 1} {where}, "
+                    f"'h' home {'again' if homed_for_this_episode else 'first'}, "
+                    "'q' quit."
+                )
+
+            _waiting_prompt()
             ch = None
             while ch is None:
-                ch = kb.get_nowait()
-                if ch is None:
+                key = kb.get_nowait()
+                if key is None:
                     time.sleep(0.05)
+                elif key in ("r", "q"):
+                    ch = key
+                elif key == "h":
+                    homed_for_this_episode = (
+                        _home_now("manual home requested ('h')...")
+                        or homed_for_this_episode
+                    )
+                    _waiting_prompt()
+                # anything else: a stale key from the slow block above, ignore
             if ch == "q":
                 _announce("Quit requested.")
                 break
-            if ch != "r":
-                continue
 
             # ---- recording state ----
             episode += 1
@@ -818,7 +871,9 @@ def main() -> None:
         "--rehome-each-episode", action="store_true", default=False,
         help="After every episode (saved or discarded), re-home the arm via "
              "joint_trajectory_controller and switch back to cartesian_controller "
-             "before waiting for the next 'r'. Implies --go-home.",
+             "before waiting for the next 'r'. Implies --go-home. Without "
+             "it each episode continues from where the previous one ended, "
+             "and 'h' at the [waiting] prompt homes on demand.",
     )
 
     # --from-bag: skip recording, just post-process

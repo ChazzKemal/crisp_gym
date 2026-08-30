@@ -55,6 +55,7 @@ import importlib.util
 import json
 import logging
 import queue
+import re
 import sys
 import time
 from collections import deque
@@ -231,19 +232,23 @@ class _LeRobotChunkSource:
         *,
         num_inference_steps: int | None = None,
         noise_scheduler_type: str | None = None,
+        n_action_steps: int | None = None,
     ):
         self._policy = AsyncLerobotPolicy(
             pretrained_path=pretrained_path,
             env=env,
             num_inference_steps=num_inference_steps,
             noise_scheduler_type=noise_scheduler_type,
+            n_action_steps=n_action_steps,
         )
         self.n_obs = self._policy.n_obs
         self.n_act = self._policy.n_act
 
     def request(self, obs_buf) -> np.ndarray:
         self._policy.parent_conn.send({"type": "OBS_SEQ", "obs_seq": list(obs_buf)})
-        chunk = self._policy.parent_conn.recv()
+        # recv_chunk (not raw recv) so a dead worker raises instead of
+        # hanging the producer forever. See AsyncLerobotPolicy.recv_chunk.
+        chunk = self._policy.recv_chunk()
         return chunk
 
     def shutdown(self) -> None:
@@ -285,6 +290,7 @@ class _SyncLeRobotChunkSource:
         *,
         num_inference_steps: int | None = None,
         noise_scheduler_type: str | None = None,
+        n_action_steps: int | None = None,
     ):
         # Local imports keep the heavy torch / lerobot import cost off the
         # deploy script's startup path when --sync is not requested.
@@ -335,6 +341,26 @@ class _SyncLeRobotChunkSource:
             policy_config.num_inference_steps = int(num_inference_steps)
         if noise_scheduler_type is not None and hasattr(policy_config, "noise_scheduler_type"):
             policy_config.noise_scheduler_type = str(noise_scheduler_type)
+        # n_action_steps override (e.g. trained with chunk_size=100, deploy
+        # at 50 for tighter replan cadence). Validate against the policy
+        # family's invariants — `chunk_size` (ACT) or
+        # `horizon - n_obs_steps + 1` (diffusion) — before mutating.
+        if n_action_steps is not None and hasattr(policy_config, "n_action_steps"):
+            steps_req = int(n_action_steps)
+            horizon = getattr(policy_config, "chunk_size", None)
+            if horizon is None:
+                horizon = getattr(policy_config, "horizon", None)
+            if horizon is not None and steps_req >= int(horizon):
+                raise ValueError(
+                    f"--n-act={steps_req} must be < horizon/chunk_size={horizon}."
+                )
+            n_obs_steps_cfg = int(getattr(policy_config, "n_obs_steps", 1))
+            if horizon is not None and steps_req > int(horizon) - n_obs_steps_cfg + 1:
+                raise ValueError(
+                    f"--n-act={steps_req} violates `n_action_steps <= horizon - "
+                    f"n_obs_steps + 1` (horizon={horizon}, n_obs_steps={n_obs_steps_cfg})."
+                )
+            policy_config.n_action_steps = steps_req
         policy_cls = get_policy_class(policy_config.type)
         policy = policy_cls.from_pretrained(pretrained_path, config=policy_config)
         policy.reset()
@@ -1199,35 +1225,190 @@ def _pre_compute_chunk_arrays(
     return target_xyz, target_quat, grip_raw, actions_f32
 
 
-def _build_chunk_speed_schedule(actions: np.ndarray, args):
-    """Per-chunk speed factor with optional adaptive lookahead within the chunk.
+def _build_chunk_speed_schedule(
+    actions: np.ndarray, args, past_buffer: np.ndarray | None = None,
+):
+    """Per-chunk speed factor with optional adaptive look-ahead / look-behind.
 
     Returns s_raw (K,). When --min-speed == --max-speed (flat), every entry
-    equals that value and no curvature math runs. When they differ,
-    compute_speed_schedule's n_lookahead window pulls speed factors from the
-    chunk's tail to inform earlier actions (slow-before-curve, bounded by
-    chunk boundary).
+    equals that value and no curvature math runs. Otherwise:
+    - ``n_lookahead`` pulls factors from the chunk's tail to inform earlier
+      actions (slow-before-curve, bounded by chunk boundary).
+    - ``n_lookbehind`` extends the window backwards using already-published
+      action rows held in ``past_buffer`` (shape ``(M, >=6)``, absolute pose
+      in the same frame as ``actions``). The buffer is concatenated in front
+      of the chunk, the schedule is computed on the stitched array, and the
+      first ``M`` factors are sliced off so the return value still has
+      length ``K``. ``past_buffer=None`` (cold start) falls back to the
+      centered window's edge-pad at the left boundary — fine for the very
+      first chunk, less informative than feeding real history.
     """
     K = actions.shape[0]
     if args.max_speed <= 1.0 and args.min_speed <= 1.0:
         return np.ones(K, dtype=np.float64)
+
+    M = max(0, int(getattr(args, "lookbehind", 0)))
+    if M > 0 and past_buffer is not None and len(past_buffer) > 0:
+        m = min(M, len(past_buffer))
+        stitched = np.concatenate(
+            [np.asarray(past_buffer[-m:, :6], dtype=np.float64), actions[:, :6]],
+            axis=0,
+        )
+        offset = m
+    else:
+        stitched = actions[:, :6]
+        offset = 0
+
     if args.cum_lookahead > 0:
         # Cumulative-angle path (matches the viewer's cum_lookahead slider).
         # Wins over --lookahead when both are > 0.
-        return compute_speed_schedule_cumangle(
-            actions[:, :6],
+        sched = compute_speed_schedule_cumangle(
+            stitched,
             max_speed=args.max_speed,
             min_speed=args.min_speed,
             clamp_deg=args.clamp_deg,
             cum_window=int(args.cum_lookahead),
+            n_lookbehind=M,
         )
-    return compute_speed_schedule(
-        actions[:, :6],
-        max_speed=args.max_speed,
-        min_speed=args.min_speed,
-        clamp_deg=args.clamp_deg,
-        n_lookahead=args.lookahead,
+    else:
+        sched = compute_speed_schedule(
+            stitched,
+            max_speed=args.max_speed,
+            min_speed=args.min_speed,
+            clamp_deg=args.clamp_deg,
+            n_lookahead=args.lookahead,
+            n_lookbehind=M,
+        )
+    return sched[offset:]
+
+
+# ---------------------------------------------------------------------------
+# --save-video helper: spawn the C++ crisp_video_recorder as a subprocess.
+#
+# Why a C++ binary and not in-process Python:
+#   The Python in-process recorder (rclpy callback + cv2.VideoWriter in a
+#   subprocess via mp.Queue) lost frames mid-stream under the same
+#   rclpy executor / GIL contention that motivated crisp_camera_bridge.cpp.
+#   The C++ recorder subscribes via rclcpp (no GIL), decompresses with
+#   cv_bridge, and writes straight to disk — same architecture as the
+#   camera bridge and crisp_sender.
+#
+# The binary lives at clearpath_remote_ws/install/tum09_custom/lib/
+#   tum09_custom/crisp_video_recorder after `colcon build`. We discover it
+#   the same way cpp_sender_handle does: try the known install path, fall
+#   back to `ros2 run` if that fails.
+# ---------------------------------------------------------------------------
+
+
+import subprocess  # noqa: E402  (close to point of use; rest of imports at top)
+
+
+def _find_crisp_video_recorder_binary() -> list[str]:
+    """Return argv prefix to launch crisp_video_recorder.
+
+    Mirrors cpp_sender_handle._build_subprocess_argv discovery: prefer the
+    known install path, fall back to `ros2 run tum09_custom ...` which
+    works if the user has the workspace setup.bash sourced.
+    """
+    candidate = Path(
+        "/home/ali/Coding/Robot_Control/clearpath_remote_ws/install/"
+        "tum09_custom/lib/tum09_custom/crisp_video_recorder"
     )
+    if candidate.exists():
+        return [str(candidate)]
+    return ["ros2", "run", "tum09_custom", "crisp_video_recorder"]
+
+
+class _VideoRecorder:
+    """Spawn + manage the crisp_video_recorder C++ subprocess.
+
+    Args:
+        camera: a crisp_py.camera.Camera (used only for its config —
+            the C++ binary subscribes to the topic directly, no IPC
+            handoff of pixel data).
+        out_path: mp4 file path. Folder must exist.
+        fps: declared playback fps for the writer.
+        log_path: optional file to redirect the subprocess's stderr/stdout
+            into so any open() failure or runtime error is captured.
+
+    Usage:
+        rec = _VideoRecorder(camera, out_path, fps=20.0, log_path=...)
+        rec.start()
+        ...
+        rec.stop(timeout=5.0)
+    """
+
+    def __init__(
+        self,
+        camera,
+        out_path: Path,
+        fps: float = 20.0,
+        log_path: Path | None = None,
+    ) -> None:
+        self.camera = camera
+        self.out_path = out_path
+        self.fps = max(0.1, float(fps))
+        self.log_path = log_path
+        self._proc: subprocess.Popen | None = None
+        self._log_fh = None
+
+    def start(self) -> None:
+        base = _find_crisp_video_recorder_binary()
+        topic = self.camera.config.camera_color_image_topic
+        argv = [
+            *base,
+            "--topic", str(topic),
+            "--out",   str(self.out_path),
+            "--fps",   f"{self.fps:.4f}",
+        ]
+        if self.log_path is not None:
+            self._log_fh = open(self.log_path, "w")
+            stdout = self._log_fh
+            stderr = subprocess.STDOUT
+        else:
+            stdout = None
+            stderr = None
+        logger.info("spawning crisp_video_recorder: %s", " ".join(argv))
+        self._proc = subprocess.Popen(
+            argv, stdout=stdout, stderr=stderr,
+        )
+
+    def is_alive(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def stop(self, timeout: float = 5.0) -> None:
+        if self._proc is None:
+            return
+        if self._proc.poll() is None:
+            # SIGINT triggers rclcpp::shutdown → executor.spin() returns →
+            # node destructor releases cv::VideoWriter with the lock held,
+            # which flushes the mp4 trailer and closes the file. That's
+            # what makes the output a valid playable mp4.
+            self._proc.send_signal(2)  # SIGINT
+            try:
+                self._proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "crisp_video_recorder did not exit on SIGINT within "
+                    "%.1fs; sending SIGTERM", timeout,
+                )
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+        rc = self._proc.returncode
+        if rc != 0:
+            logger.warning(
+                "crisp_video_recorder exited with rc=%d (see %s)",
+                rc, self.log_path or "stdout",
+            )
+        if self._log_fh is not None:
+            try:
+                self._log_fh.close()
+            except Exception:
+                pass
+            self._log_fh = None
 
 
 def main() -> int:
@@ -1320,6 +1501,17 @@ def main() -> int:
              "slow-before-curve at the cost of latency within the chunk.",
     )
     parser.add_argument(
+        "--lookbehind", type=int, default=0,
+        help="Backward window for compute_speed_schedule, symmetric "
+             "counterpart to --lookahead. The producer holds a deque of "
+             "the last N action rows it pushed to the sender and prepends "
+             "them to the current chunk before computing the schedule, so "
+             "the arm stays slow on the EXIT of a curve, not just the "
+             "entry. 0 (default) = forward-only (legacy behaviour). For "
+             "the very first chunk the buffer is empty and the centered "
+             "window edge-pads on the left.",
+    )
+    parser.add_argument(
         "--cum-lookahead", type=int, default=0,
         help="Cumulative-angle forward window. When > 0, the chunk schedule "
              "uses compute_speed_schedule_cumangle "
@@ -1381,6 +1573,20 @@ def main() -> int:
              "gates CHANGES (same-value re-sends still follow edge-detect). "
              "Python sender only — ignored with --cpp-sender. At 20 fps, N=5 "
              "≈ 250 ms minimum dwell between open/close transitions.",
+    )
+    parser.add_argument(
+        "--gripper-slowdown-frames", type=int, default=0, metavar="N",
+        help="Trajectory-speed brake during a grasp: on each open→close "
+             "gripper transition, force the arm speed factor s_eff back to "
+             "1.0 (real-time) for that frame and the next N-1, then resume the "
+             "speedup schedule. 0 (default) disables. Edge-triggered on the "
+             "CLOSE transition only — the arm runs real-time *while it grabs*, "
+             "but staying closed during the carry/lift is unaffected (no new "
+             "transition), so speedup resumes for transport. Forces s_eff=1.0 "
+             "(not a clamp). No effect on baseline runs (s_eff already 1.0). "
+             "Applied in the producer before cycle-snap, so it's baked into the "
+             "per-frame deadlines and works with --cpp-sender. At 20 fps, N=10 "
+             "≈ 0.5 s (about one 2F-85 full close at --gripper-max-speed).",
     )
     parser.add_argument(
         "--gripper-max-speed", action="store_true",
@@ -1520,6 +1726,51 @@ def main() -> int:
              "drain — the old behaviour).",
     )
     parser.add_argument(
+        "--blend-overlap", type=int, default=0, metavar="N",
+        help="Temporal-ensemble the chunk seam to remove the per-chunk "
+             "'push'. Hold back the last N frames of each chunk and average "
+             "them with the next chunk's first N frames, ramping the weight "
+             "old->new (frame i weight w=(i+1)/(N+1) toward the NEW chunk) so "
+             "the seam stays continuous with what's executing but converges "
+             "to the fresher prediction. Averages the pose channels "
+             "(xyz + rotvec) only; the gripper channel is taken from the new "
+             "chunk (NEVER averaged). Producer-side, so it applies to both "
+             "the Python and C++ senders. N is clamped to K//2 (half the "
+             "per-chunk frame count) so the blended head and held-back tail "
+             "never overlap. 0 (default) disables — chunks are stitched "
+             "head-to-tail.",
+    )
+    parser.add_argument(
+        "--blend-mode", type=str, default="linear",
+        choices=("linear", "hermite"),
+        help="How to interpolate the chunk seam when --blend-overlap > 0. "
+             "'linear' (default, existing behaviour): per-frame weighted "
+             "average  out=(1-w)*prev_pred + w*new_pred  with w ramping "
+             "0->1 over the overlap. 'hermite': replace the overlap slots "
+             "with a cubic Hermite curve from the last actually-emitted "
+             "frame (p_start, v_start) to the first verbatim new-chunk "
+             "frame (p_end, v_end) — matches both position AND velocity at "
+             "both ends, so the executed trajectory has C1 continuity at "
+             "the boundary (no direction reversal). Gripper channel [6] "
+             "is NEVER interpolated in either mode — always takes the new "
+             "chunk's value. Requires --blend-overlap > 0 to have any "
+             "effect; --blend-skip is honoured in linear mode but ignored "
+             "in hermite (Hermite always starts the bridge at slot 0).",
+    )
+    parser.add_argument(
+        "--blend-skip", type=int, default=0, metavar="S",
+        help="Commit horizon for --blend-overlap: execute the first S frames "
+             "of the overlap VERBATIM from the previous chunk (pose AND "
+             "gripper) before blending begins. These timesteps are treated as "
+             "already-committed/in-flight, so the fresh chunk's (possibly "
+             "noisy) first predictions don't perturb them. Blending then runs "
+             "over the remaining N-S overlap frames, with the old->new ramp "
+             "restarted across that shorter region (so frame S stays close to "
+             "the committed old plan and converges to new by frame N). "
+             "Requires 0 <= S < --blend-overlap; clamped to the overlap "
+             "length. 0 (default) blends from the very first overlap frame.",
+    )
+    parser.add_argument(
         "--startup-delay", type=float, default=0.0,
         help="Sleep this many seconds after the sender starts but before "
              "the producer loop pushes the first chunk. Gives the "
@@ -1612,6 +1863,48 @@ def main() -> int:
              "minimal quality loss. DDPM quality degrades fast below ~50 "
              "steps because the noise schedule wasn't trained for it. No "
              "effect for non-diffusion policies — silently ignored.",
+    )
+    parser.add_argument(
+        "--n-act", type=int, default=None,
+        help="Override the policy's n_action_steps (per-inference action "
+             "horizon) at load time. Use when the model was trained with a "
+             "large chunk (e.g. chunk_size=100) but you want to replan more "
+             "often — e.g. `--n-act 50` makes the producer consume 50 actions "
+             "per chunk and request a new one. Must satisfy n_act < "
+             "chunk_size (ACT) or n_act <= horizon - n_obs_steps + 1 "
+             "(diffusion); load fails loudly otherwise. None (default) = use "
+             "the checkpoint's n_action_steps unchanged.",
+    )
+    parser.add_argument(
+        "--run-tag", default=None,
+        help="Optional human-readable tag appended to the deploy_runs folder "
+             "name. Result: deploy_runs/<YYYYMMDDTHHMMSS>_<tag>/. Useful for "
+             "tagging which demo / task a run corresponds to. Non "
+             "filesystem-safe chars are sanitised to '-'.",
+    )
+    parser.add_argument(
+        "--save-video", action="store_true",
+        help="Record a video of the run into deploy_runs/<...>/video_<cam>.mp4 "
+             "via a writer subprocess (mp4v codec, plays in any standard "
+             "player). Captures from the camera named by --video-camera at "
+             "--video-fps Hz. Bounded queue with drop-on-overflow so video "
+             "I/O can never stall the deploy loop. Dropped-frame count is "
+             "logged at shutdown.",
+    )
+    parser.add_argument(
+        "--video-camera", default="all",
+        help="Camera(s) to record when --save-video is set. Accepts: "
+             "'all' (default — every camera in the env, so both Orbbec + "
+             "D405 in ur10e_ridgeback_dual_cam_env), a single camera_name "
+             "(e.g. 'camera'), or a comma-separated list (e.g. "
+             "'camera,d405'). One subprocess per camera, each writes "
+             "video_<name>.mp4 + video_recorder_<name>.log into the run "
+             "folder. Names not found in the env are skipped with a warning.",
+    )
+    parser.add_argument(
+        "--video-fps", type=float, default=20.0,
+        help="Capture cadence for --save-video (Hz). Default 20 matches "
+             "the typical --fps; lower values cut CPU cost.",
     )
     parser.add_argument("--yes", action="store_true", help="Skip the [Y/n] prompt.")
     parser.add_argument(
@@ -1728,6 +2021,25 @@ def main() -> int:
         )
     else:
         print(f"  overlap:       OFF — wait for full drain between chunks")
+    if args.blend_overlap > 0:
+        if args.blend_mode == "hermite":
+            print(
+                f"  blend:         overlap {args.blend_overlap} frames, "
+                f"HERMITE cubic bridge (matches pos+vel at both seam "
+                f"ends; gripper from new)"
+            )
+        else:
+            skip_txt = (
+                f", first {args.blend_skip} held verbatim from prev chunk"
+                if args.blend_skip > 0 else ""
+            )
+            print(
+                f"  blend:         overlap {args.blend_overlap} frames, "
+                f"LINEAR ramp old→new{skip_txt} (pose blended; gripper "
+                f"from new)"
+            )
+    else:
+        print("  blend:         OFF — chunks stitched head-to-tail")
     if args.shadow_act:
         te = args.shadow_temporal_ensemble
         rtc = "RTC-configured" if te is not None else "no RTC"
@@ -1824,12 +2136,14 @@ def main() -> int:
                 pretrained_path=str(pretrained_path), env=env,
                 num_inference_steps=args.num_inference_steps,
                 noise_scheduler_type=args.noise_scheduler_type,
+                n_action_steps=args.n_act,
             )
         else:
             chunk_source = _LeRobotChunkSource(
                 pretrained_path=str(pretrained_path), env=env,
                 num_inference_steps=args.num_inference_steps,
                 noise_scheduler_type=args.noise_scheduler_type,
+                n_action_steps=args.n_act,
             )
         logger.info(
             "LeRobot chunk source ready (n_obs=%d, n_act=%d, sync=%s)",
@@ -1902,6 +2216,27 @@ def main() -> int:
         env.home(blocking=True)
         logger.info("Phase 1: homed.")
 
+    # In direct-action mode the deploy sender drives the gripper's
+    # GripperCommand action server itself. env.home() above called
+    # gripper.open(), which left crisp_py's _target set; crisp_py's own 30 Hz
+    # _callback_publish_target relay would then keep streaming goals toward that
+    # stale target, preempting the sender's goals every ~33 ms — the gripper
+    # "sends then stops". Null _target so that relay early-returns (it returns
+    # when _target is None, gripper.py:_callback_publish_target), leaving the
+    # sender as the SOLE writer. Guarded to the case where the direct path is
+    # actually taken (mirrors the sender wiring below); the Float32 path RELIES
+    # on crisp_py's relay, so it must keep _target.
+    if (
+        args.gripper_direct_action
+        and env.gripper is not None
+        and env.gripper._command_action_client is not None
+    ):
+        env.gripper._target = None
+        logger.info(
+            "Direct-action gripper: silenced crisp_py's 30 Hz relay "
+            "(gripper._target=None) — deploy sender is sole writer."
+        )
+
     # ---- Phase 2: switch to cartesian ----
     if args.offline:
         logger.info(
@@ -1944,7 +2279,9 @@ def main() -> int:
     # user has BOTH --gripper-max-speed and --scale-kp set, warn that the
     # scaler will subsequently drive the speed back down to base_gripper_speed
     # * s_eff per the cycle-snap schedule.
-    if args.gripper_max_speed:
+    # TEMP_DISABLE_GRIPPER_SPEED: gripper_speed_controller adjustment is
+    # currently disabled — drop the `and False` to re-enable.
+    if args.gripper_max_speed and False:
         gripper_present = env.gripper is not None
         if not args.offline and gripper_present:
             try:
@@ -2093,11 +2430,81 @@ def main() -> int:
     logger.info("Phase 3: sender %s started",
                 "(C++ subprocess)" if args.cpp_sender else "(Python thread)")
 
+    # ---- Phase 3a: spawn video recorders BEFORE the startup delay ----
+    # Each crisp_video_recorder subprocess subscribes to a camera topic over
+    # DDS; endpoint discovery + first-frame arrival takes ~2-3 s (grep a
+    # video_recorder_*.log for "subscribing" -> "video writer opened"). They
+    # MUST be spawned before the startup_delay sleep so that delay doubles as
+    # their settle window. Spawned after it, the arm starts moving before the
+    # recorder is subscribed, the opening best-effort frames are dropped, and
+    # the start of the episode never reaches the mp4 (the missing-start bug).
+    # NOTE: this relies on --startup-delay being set (your runs use 4.0); with
+    # --startup-delay 0 the recorders still get no settle time.
+    #
+    # out_dir / run_started_at are computed here so each subprocess streams
+    # straight into the run folder; run_started_mono (the duration anchor)
+    # stays down by the loop so duration_s still excludes this delay.
+    run_started_at = datetime.now().isoformat(timespec="seconds")
+    ts_dir = run_started_at.replace(":", "").replace("-", "")
+    if getattr(args, "run_tag", None):
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", args.run_tag).strip("-")
+        if safe:
+            ts_dir = f"{ts_dir}_{safe}"
+    out_dir = LEROBOT_CACHE / "deploy_runs" / ts_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("deploy run folder: %s", out_dir)
+
+    # --save-video: spawn one crisp_video_recorder subprocess per requested
+    # camera. Each writes video_<cam_name>.mp4 + video_recorder_<cam_name>.log
+    # into out_dir. Names not in env.cameras are warned + skipped; the run
+    # continues without that recorder. Empty list (e.g. env has no cameras)
+    # makes --save-video a silent no-op.
+    video_recorders: list[_VideoRecorder] = []
+    if args.save_video:
+        if args.video_camera.strip().lower() == "all":
+            requested = [
+                getattr(c.config, "camera_name", "?") for c in env.cameras
+            ]
+        else:
+            requested = [
+                s.strip() for s in args.video_camera.split(",") if s.strip()
+            ]
+        by_name = {
+            getattr(c.config, "camera_name", "?"): c for c in env.cameras
+        }
+        if not env.cameras:
+            logger.warning("--save-video ignored: env has no cameras.")
+        for name in requested:
+            cam_match = by_name.get(name)
+            if cam_match is None:
+                logger.warning(
+                    "--save-video: camera '%s' not found in env "
+                    "(have: %s); skipping.",
+                    name, list(by_name.keys()),
+                )
+                continue
+            video_path = out_dir / f"video_{name}.mp4"
+            video_log = out_dir / f"video_recorder_{name}.log"
+            recorder = _VideoRecorder(
+                camera=cam_match,
+                out_path=video_path,
+                fps=args.video_fps,
+                log_path=video_log,
+            )
+            recorder.start()
+            video_recorders.append(recorder)
+            logger.info(
+                "Phase 2c: --save-video on (camera=%s → %s @ %.1f Hz, "
+                "subprocess log: %s)",
+                name, video_path, args.video_fps, video_log,
+            )
+
     if args.startup_delay > 0:
         logger.info(
-            "Phase 3b: %.2fs startup delay — waiting for "
-            "cartesian_controller subscriber to match the sender's "
-            "/target_pose publisher before the first chunk lands.",
+            "Phase 3b: %.2fs startup delay — lets the cartesian_controller "
+            "subscriber match the sender's /target_pose publisher AND the "
+            "video recorders finish subscribing to their camera topics "
+            "before the first chunk lands and the arm starts moving.",
             args.startup_delay,
         )
         time.sleep(args.startup_delay)
@@ -2155,11 +2562,13 @@ def main() -> int:
     chunk_count = 0
     interrupted = False
     failed = False
-    # ISO-ish wall-clock timestamps + reason string for the summary.json
-    # written in the finally block. Reason starts as 'unknown' and gets
-    # set to one of: 'normal' (max_chunks reached), 'ctrl_c', 'error',
-    # 'chunk_source_pipe_closed' along the way.
-    run_started_at = datetime.now().isoformat(timespec="seconds")
+    # 'stopped_by' reason for the summary.json written in the finally block:
+    # starts 'unknown', then set to one of 'normal' (max_chunks reached),
+    # 'ctrl_c', 'error', 'chunk_source_pipe_closed' along the way.
+    # run_started_at, out_dir and the video recorders were set up earlier
+    # (Phase 3a, before the startup delay) so the recorders catch the start
+    # of the episode; run_started_mono stays here so duration_s still
+    # excludes the startup delay.
     run_started_mono = time.monotonic()
     stopped_by = "unknown"
     # Producer-local: deadline of the last item we pushed to the queue.
@@ -2167,6 +2576,31 @@ def main() -> int:
     # overlap-mode append doesn't double-schedule against existing items.
     # None means "queue is empty / first chunk" → anchor at time.monotonic().
     last_pushed_deadline: float | None = None
+    # --gripper-slowdown-frames state. prev_grip_closed = last frame's commanded
+    # gripper state (None until the first chunk; carried across chunks so an
+    # open→close edge at a chunk's frame 0 is still caught). close_slow_remaining
+    # = real-time frames of an in-progress grab window that still spill into the
+    # next chunk.
+    prev_grip_closed: bool | None = None
+    close_slow_remaining: int = 0
+    # Producer-side carry buffer for --blend-overlap: the last N raw action
+    # frames of the previous chunk, held back (not pushed) so they can be
+    # averaged with the next chunk's first N frames at the seam. None until
+    # the first chunk has been processed (and whenever blending is disabled).
+    blend_carry: np.ndarray | None = None
+    # Producer-side: the last 2 ACTUALLY EMITTED frames of the previous
+    # chunk, kept around for --blend-mode hermite so it can extract the
+    # incoming velocity (last_emitted[-1] - last_emitted[-2]) to anchor
+    # the cubic. None until the first chunk has emitted >= 2 frames; in
+    # linear mode it stays None (cost: zero).
+    prev_emitted_tail: np.ndarray | None = None
+    # Producer-side: rolling buffer of the last --lookbehind action rows
+    # actually pushed to the sender (post-blend, post-emit slice). Fed into
+    # _build_chunk_speed_schedule so the centered window can see real past
+    # motion at the chunk's left boundary instead of edge-padding. Empty
+    # (and a no-op) when --lookbehind == 0. Stored as a deque of (>=6,)
+    # arrays so the per-chunk concatenate is one np.asarray call.
+    lookbehind_buf: deque = deque(maxlen=max(0, int(args.lookbehind)))
     # Inference-latency samples (mirror of sender.pub_dt_samples). Logged
     # as percentiles at shutdown.
     pred_dt_samples: list[float] = []
@@ -2366,9 +2800,141 @@ def main() -> int:
                 )
                 continue
 
+            # 2d. Chunk-seam blending (temporal ensembling). Hold back the
+            #     last N raw frames of this chunk; average them with the next
+            #     chunk's first N frames, ramping the weight old->new so the
+            #     seam stays continuous with what's executing but converges to
+            #     the fresher prediction. Operates on the RAW action array
+            #     (xyz + rotvec) BEFORE pose/quat conversion; the gripper
+            #     channel [6] is NEVER averaged (binary) — it takes the new
+            #     chunk's value. Producer-side → applies to both senders. N is
+            #     clamped to K//2 so the blended head [0:N] and held-back tail
+            #     [K-N:] never overlap. --blend-overlap 0 keeps head-to-tail.
+            if args.blend_overlap > 0 and K >= 2:
+                N = min(int(args.blend_overlap), K // 2)
+                if blend_carry is not None:
+                    if args.blend_mode == "hermite" and prev_emitted_tail is not None and K > N + 1:
+                        # Cubic Hermite bridge from (p_start, v_start) at
+                        # the last actually-emitted frame to (p_end, v_end)
+                        # at the first verbatim new-chunk frame after the
+                        # blend zone. The blend slots chunk[0:N] are filled
+                        # with N interior samples of the cubic. Bridges
+                        # both position AND velocity -> no boundary kink.
+                        #
+                        # Parameterization: cubic on s in [0, 1], with N+1
+                        # equal subdivisions (slot 0 at s=1/(N+1), slot N-1
+                        # at s=N/(N+1)). Frame-step deltas (no dt scaling)
+                        # because dt cancels between v and T in the
+                        # standard Hermite form.
+                        p_start = prev_emitted_tail[-1, :6].astype(np.float64)
+                        v_start = (
+                            prev_emitted_tail[-1, :6].astype(np.float64)
+                            - prev_emitted_tail[-2, :6].astype(np.float64)
+                        )
+                        p_end = chunk[N, :6].astype(np.float64)
+                        v_end = (
+                            chunk[N + 1, :6].astype(np.float64)
+                            - chunk[N, :6].astype(np.float64)
+                        )
+                        T_frames = float(N + 1)
+                        s_vec = (np.arange(N) + 1) / T_frames   # (N,)
+                        h00 = 2 * s_vec ** 3 - 3 * s_vec ** 2 + 1
+                        h10 = s_vec ** 3 - 2 * s_vec ** 2 + s_vec
+                        h01 = -2 * s_vec ** 3 + 3 * s_vec ** 2
+                        h11 = s_vec ** 3 - s_vec ** 2
+                        bridge = (
+                            h00[:, None] * p_start
+                            + (h10[:, None] * T_frames) * v_start
+                            + h01[:, None] * p_end
+                            + (h11[:, None] * T_frames) * v_end
+                        )
+                        chunk[:N, :6] = bridge.astype(chunk.dtype)
+                        # Gripper [6] left as the new chunk's value
+                        # (NEVER interpolated, matches linear mode).
+                    else:
+                        # Linear path (existing behaviour). Per-frame
+                        # weighted average; skips the first `skip` frames
+                        # as committed.
+                        n = min(len(blend_carry), N)
+                        skip = min(max(0, int(args.blend_skip)), n)
+                        n_blend = n - skip  # frames actually averaged
+                        for i in range(n):
+                            if i < skip:
+                                # Commit horizon: execute the previous chunk's
+                                # prediction VERBATIM (pose AND gripper) for these
+                                # already-in-flight timesteps; blending starts
+                                # after them.
+                                chunk[i, :] = blend_carry[i, :]
+                            else:
+                                # Ramp restarted across the (n_blend) blended
+                                # frames: frame `skip` stays close to the committed
+                                # old plan (w small) and converges to new by the
+                                # end. Gripper [6] is left as the new chunk's value
+                                # (never averaged).
+                                j = i - skip
+                                w = (j + 1) / (n_blend + 1)  # old-heavy -> new-heavy
+                                chunk[i, :6] = (
+                                    (1.0 - w) * blend_carry[i, :6] + w * chunk[i, :6]
+                                )
+                blend_carry = chunk[K - N:].copy()   # hold back for next seam
+                chunk = chunk[: K - N].copy()         # emit the rest now
+                K = chunk.shape[0]
+                # Save the last 2 actually-emitted frames for the next
+                # iteration's Hermite v_start. Only needed in hermite mode,
+                # but the cost is one ndarray copy of shape (2, 7) per
+                # chunk so we do it unconditionally to keep the code paths
+                # symmetric. K >= 2 by the outer `if K >= 2` guard above
+                # (post-emit K is K_orig - N, which is >= K_orig // 2 >= 1;
+                # for K_orig >= 4 it's >= 2).
+                if K >= 2:
+                    prev_emitted_tail = chunk[K - 2:K].copy()
+
             # 3. Speed schedule on the (possibly strided) chunk.
             _t_stage = time.perf_counter()
-            s_raw = _build_chunk_speed_schedule(chunk.astype(np.float64), args)
+            past = (
+                np.asarray(lookbehind_buf, dtype=np.float64)
+                if len(lookbehind_buf) > 0 else None
+            )
+            s_raw = _build_chunk_speed_schedule(
+                chunk.astype(np.float64), args, past_buffer=past,
+            )
+
+            # 3b. Gripper-grab slowdown (--gripper-slowdown-frames). On each
+            #     open→close transition, force s_raw = 1.0 (real-time) for that
+            #     frame + the next N-1, so the arm runs at normal speed *while it
+            #     grabs* and resumes speedup for the carry. Edge-triggered on the
+            #     CLOSE transition, NOT the level — staying closed during the
+            #     carry fires nothing, so transport keeps the speedup. The window
+            #     can straddle chunk boundaries (close_slow_remaining carries the
+            #     leftover). No-op when N=0, and a no-op anyway with no speedup
+            #     (s_raw already 1.0). Baked into s_raw → flows through cycle-snap
+            #     into dt_eff/deadlines, so it also works with --cpp-sender.
+            N_grip_slow = int(getattr(args, "gripper_slowdown_frames", 0))
+            if N_grip_slow > 0 and gripper_enabled:
+                g_norm = np.clip(chunk[:, 6], 0.0, 1.0)
+                if args.invert_gripper:
+                    g_norm = 1.0 - g_norm
+                closed = g_norm < 0.5  # commanded "closed" (post-invert)
+                slow_mask = np.zeros(K, dtype=bool)
+                # Carry-in: window opened by a close near a prior chunk's end.
+                if close_slow_remaining > 0:
+                    c = min(close_slow_remaining, K)
+                    slow_mask[:c] = True
+                    close_slow_remaining -= c
+                # New open→close edges this chunk (prev_grip_closed seeds frame 0).
+                was_closed = (
+                    bool(prev_grip_closed) if prev_grip_closed is not None else False
+                )
+                for i in range(K):
+                    if closed[i] and not was_closed:  # open→close edge = a grab
+                        end = i + N_grip_slow
+                        slow_mask[i:min(end, K)] = True
+                        if end > K:
+                            close_slow_remaining = max(close_slow_remaining, end - K)
+                    was_closed = bool(closed[i])
+                prev_grip_closed = bool(closed[-1])
+                if slow_mask.any():
+                    s_raw[slow_mask] = 1.0
 
             # 4. Cycle-snap.
             cycles, dt_eff, s_eff = build_speed_queue_arrays(
@@ -2435,6 +3001,19 @@ def main() -> int:
             # Carry the chunk's mean dt_eff into the next iteration so the
             # pre-inference budget check is accurate.
             dt_eff_mean_prev = float(np.mean(dt_eff))
+
+            # Feed the emitted action rows into the lookbehind buffer so the
+            # next chunk's speed schedule can see real past motion at its
+            # left boundary. Uses the post-blend, post-emit chunk (what was
+            # actually queued for publish) — the truncated `K-N` slice when
+            # --blend-overlap is active, the full K rows otherwise. deque
+            # maxlen enforces the window size; appends are no-ops when
+            # --lookbehind == 0.
+            if lookbehind_buf.maxlen and lookbehind_buf.maxlen > 0:
+                for i in range(K):
+                    lookbehind_buf.append(
+                        np.asarray(chunk[i, :6], dtype=np.float64)
+                    )
 
             # NOW it's safe to log — sender has had a chance to pick up
             # item 0 from a deadline that's still genuinely in the future.
@@ -2814,9 +3393,9 @@ def main() -> int:
                 ),
             }
 
-            ts_dir = run_started_at.replace(":", "").replace("-", "")
-            out_dir = LEROBOT_CACHE / "deploy_runs" / ts_dir
-            out_dir.mkdir(parents=True, exist_ok=True)
+            # out_dir + ts_dir were computed up-front (right after
+            # run_started_at) so the video writer subprocess can stream
+            # into the same folder during the run. Reuse them here.
             summary_path = out_dir / "summary.json"
             with open(summary_path, "w") as f:
                 json.dump(summary, f, indent=2, default=str)
@@ -2929,6 +3508,25 @@ def main() -> int:
                 logger.info("shadow policy shut down")
             except Exception:
                 logger.exception("shadow_policy.shutdown() raised")
+
+        # Stop --save-video subprocesses (one per camera). SIGINT triggers
+        # a clean rclcpp shutdown → cv::VideoWriter.release() with the
+        # writer lock held, which flushes the mp4 trailer. Per-camera
+        # stderr/stdout is in video_recorder_<name>.log inside out_dir;
+        # tail those for frame counts / any open() failures. Independent
+        # of the deploy process — the C++ binaries own the rclcpp
+        # subscriptions, so the deploy loop was never on their critical
+        # path.
+        for rec in video_recorders:
+            try:
+                rec.stop(timeout=5.0)
+            except Exception:
+                logger.exception("video_recorder.stop() raised")
+        if video_recorders:
+            logger.info(
+                "video recorders stopped: %d (see video_recorder_*.log)",
+                len(video_recorders),
+            )
 
         # Shutdown chunk source (real policy ⇒ joins inference subprocess;
         # fake source ⇒ no-op).

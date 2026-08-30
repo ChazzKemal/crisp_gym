@@ -1,0 +1,22 @@
+name: "smolvla_rtc_policy"
+
+# Real-Time Chunking (RTC) configuration. Mapped 1:1 onto
+# lerobot.policies.rtc.configuration_rtc.RTCConfig and attached to the
+# SmolVLA policy config before from_pretrained() in the inference worker.
+rtc:
+  enabled: true
+  execution_horizon: 10
+  inference_delay: 2          # initial estimate; the dispatcher overrides this
+                              # at each request with ceil(measured_latency/dt_base).
+  max_guidance_weight: 10.0
+  prefix_attention_schedule: "EXP"
+
+# Dispatcher knob (NOT part of RTCConfig itself): when ActionQueue.qsize()
+# drops to <= this many remaining actions, the InferenceDispatcherThread
+# fires the next inference. Should be >= execution_horizon + inference_delay
+# so the queue never starves the actor loop mid-inference.
+queue_refill_threshold: 12
+
+# Optional flow-matching denoise-steps override for the underlying SmolVLA
+# model. Leave null to use the checkpoint's setting.
+num_inference_steps: null

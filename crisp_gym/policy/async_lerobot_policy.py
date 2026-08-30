@@ -2,9 +2,18 @@
 
 import logging
 from collections import deque
-from multiprocessing import Pipe, Process
+import multiprocessing as mp
 from multiprocessing.connection import Connection
 from typing import Callable, Tuple
+
+# cv2 MUST be imported before torch/lerobot. cv2's bundled libtiff needs the
+# system libjpeg's `jpeg12_write_raw_data`; if torch loads a different libjpeg
+# into the process first, the later `crisp_py.camera` -> cv2 import dies with
+# "undefined symbol: jpeg12_write_raw_data". This module is re-imported from
+# scratch by the spawned inference worker, so without this the worker dies on
+# startup and the parent blocks forever in recv(). Same trap documented in
+# examples/29_clean_deploy.py.
+import cv2  # noqa: F401  (import for side effect: pins the correct libjpeg)
 
 import numpy as np
 import torch
@@ -55,6 +64,7 @@ class AsyncLerobotPolicy(Policy):
         *,
         num_inference_steps: int | None = None,
         noise_scheduler_type: str | None = None,
+        n_action_steps: int | None = None,
     ):
         """Initialize the policy.
 
@@ -65,6 +75,14 @@ class AsyncLerobotPolicy(Policy):
         ``n_action_steps <= horizon - n_obs_steps + 1`` constraint). This
         replaces the previous hardcoded ``n_obs=2, n_act=5`` defaults.
 
+        ``n_action_steps`` overrides the checkpoint's per-inference action
+        horizon at load time. Use this when the model was trained with a
+        large chunk (e.g. 100) but you want to replan more often (e.g. 50).
+        Must satisfy ``n_action_steps <= chunk_size`` (ACT) or
+        ``n_action_steps <= horizon - n_obs_steps + 1`` (diffusion); the
+        inference worker validates this and raises if violated. ``None``
+        (default) = use the value from the checkpoint config.
+
         ``num_inference_steps`` / ``noise_scheduler_type`` override the
         diffusion policy's denoising-loop config at load time. None = use
         checkpoint setting. Silently ignored by non-diffusion policies.
@@ -74,7 +92,13 @@ class AsyncLerobotPolicy(Policy):
         replans on every chunk boundary, so this only matters for callers
         that still use the legacy ``make_data_fn`` path.
         """
-        self.parent_conn, self.child_conn = Pipe()
+        # Spawn (not fork) so the worker can initialize CUDA cleanly: a forked
+        # child cannot re-init a CUDA context the parent already touched
+        # ("Cannot re-initialize CUDA in forked subprocess"). Spawn re-imports
+        # this module and re-pickles the kwargs below — all of which are now
+        # picklable (no live `env`; see inference_worker).
+        ctx = mp.get_context("spawn")
+        self.parent_conn, self.child_conn = ctx.Pipe()
         self.env = env
 
         # Peek at the policy config once in the parent so the deploy main loop
@@ -90,16 +114,20 @@ class AsyncLerobotPolicy(Policy):
         # ACT has n_obs_steps=1, diffusion defaults to 2. Both expose
         # n_action_steps directly. getattr fallbacks tolerate older configs.
         self.n_obs = int(getattr(peeked_cfg, "n_obs_steps", 1))
-        self.n_act = int(getattr(peeked_cfg, "n_action_steps", 1))
+        ckpt_n_act = int(getattr(peeked_cfg, "n_action_steps", 1))
+        # CLI override (e.g. --n-act 50 on a chunk_size=100 model) wins.
+        # The inference worker re-validates against `chunk_size` / `horizon`
+        # before applying, so a value that violates the policy's invariant
+        # raises there instead of corrupting the producer's rolling buffer.
+        self.n_act = int(n_action_steps) if n_action_steps is not None else ckpt_n_act
         self.replan_time = 3
         self.inpainting = False
 
-        self.inf_proc = Process(
+        self.inf_proc = ctx.Process(
             target=inference_worker,
             kwargs={
                 "conn": self.child_conn,
                 "pretrained_path": pretrained_path,
-                "env": env,
                 "steps": self.n_act,
                 "inpainting": self.inpainting,
                 "replan_time": self.replan_time,
@@ -142,7 +170,7 @@ class AsyncLerobotPolicy(Policy):
                     obs_buf.append(self.env._get_obs())
                     self.parent_conn.send({"type": "OBS_SEQ", "obs_seq": list(obs_buf)})
                     print("Starting new inference")
-                next_chunk = self.parent_conn.recv()
+                next_chunk = self.recv_chunk()
                 current_chunk = next_chunk[self.n_act - self.replan_time :]
                 print("Length ot the new current chunk:", len(current_chunk))
 
@@ -168,6 +196,34 @@ class AsyncLerobotPolicy(Policy):
 
         return _fn
 
+    # Default ceiling for a single inference round-trip. Generous: a cold
+    # laptop GPU at idle clocks can take well over a second per chunk.
+    RECV_TIMEOUT_S = 30.0
+
+    def recv_chunk(self, timeout: float | None = None):
+        """Receive one chunk, raising instead of blocking forever.
+
+        A bare ``parent_conn.recv()`` hangs indefinitely if the inference
+        worker died (e.g. an ImportError at spawn time): the pipe stays open
+        from the parent's side and no reply ever arrives. In a live deploy
+        that means the producer silently stops feeding the queue and the arm
+        holds its last pose with no error. Poll instead, and check the
+        worker is alive before declaring a timeout.
+        """
+        deadline = timeout if timeout is not None else self.RECV_TIMEOUT_S
+        if self.parent_conn.poll(deadline):
+            return self.parent_conn.recv()
+        if not self.inf_proc.is_alive():
+            raise RuntimeError(
+                f"inference worker (pid={self.inf_proc.pid}) died with exit "
+                f"code {self.inf_proc.exitcode} — see its traceback above. "
+                f"No chunk will ever arrive."
+            )
+        raise TimeoutError(
+            f"no chunk from inference worker after {deadline:.1f}s "
+            f"(worker still alive — inference is hung or extremely slow)."
+        )
+
     @override
     def reset(self):
         """Reset the policy state."""
@@ -184,7 +240,6 @@ class AsyncLerobotPolicy(Policy):
 def inference_worker(  # noqa: D417
     conn: Connection,
     pretrained_path: str,
-    env: ManipulatorBaseEnv,
     steps: int | None,
     inpainting: bool,
     replan_time: int,
@@ -196,7 +251,6 @@ def inference_worker(  # noqa: D417
     Args:
         conn (Connection): The connection to the parent process for sending and receiving data.
         pretrained_path (str): Path to the pretrained policy model.
-        env (ManipulatorBaseEnv): The environment in which the policy will be applied.
         steps (int): How many actions are executed from the prediction
         inpainting (bool): Whether to use inpainting in the prediction of a new chunk or not
         replan_time (int): After how many steps to start predicting a new action chunk

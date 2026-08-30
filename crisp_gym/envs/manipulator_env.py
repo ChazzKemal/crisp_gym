@@ -308,16 +308,19 @@ class ManipulatorBaseEnv(gym.Env):
         """Wait until the robot, gripper, cameras, and sensors are ready."""
         logger.debug("Waiting for robot, gripper, cameras, and sensors to be ready...")
 
-        self.robot.wait_until_ready(timeout=3)
+        # Under the Fast DDS discovery server, a fresh node's subscription
+        # matching alone can take several seconds — 3 s timeouts fired
+        # spuriously while the robot was publishing fine.
+        self.robot.wait_until_ready(timeout=15)
 
         if self.config.gripper_mode != GripperMode.NONE:
-            self.gripper.wait_until_ready(timeout=3)
+            self.gripper.wait_until_ready(timeout=10)
 
         for camera in self.cameras:
-            camera.wait_until_ready(timeout=3)
+            camera.wait_until_ready(timeout=10)
 
         for sensor in self.sensors:
-            sensor.wait_until_ready(timeout=3)
+            sensor.wait_until_ready(timeout=10)
 
         self._wait_for_controllers(timeout=10.0)
 

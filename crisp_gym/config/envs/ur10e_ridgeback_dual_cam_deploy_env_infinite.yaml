@@ -1,0 +1,128 @@
+# UR10e on Clearpath Ridgeback — DEPLOY env for the 13-dim `act_infinite` policy.
+#
+# Identical to ur10e_ridgeback_dual_cam_deploy_env.yaml in every respect
+# EXCEPT `observations_to_include_to_state` (see the bottom of this file).
+#
+# The `act_infinite` checkpoint
+# (outputs/train/act_infinite/checkpoints/last/pretrained_model) was trained
+# on a 13-dim `observation.state`:
+#
+#   idx  0-5   6 joint angles  [shoulder_pan, shoulder_lift, elbow,
+#                               wrist_1, wrist_2, wrist_3]   (radians)
+#   idx  6-8   cartesian x, y, z                            (metres)
+#   idx  9-11  cartesian roll, pitch, yaw                   (radians)
+#   idx 12     gripper                                      (0->1 norm)
+#
+# i.e. the channel order is  JOINTS -> CARTESIAN -> GRIPPER.
+#
+# ============================ IMPORTANT ====================================
+# This yaml ALONE is NOT sufficient. `observations_to_include_to_state` is
+# only a membership filter — it does not set the concatenation order. The
+# flat `observation.state` is built from `_get_obs` *insertion order*, which
+# is hard-coded cartesian -> gripper -> joints (manipulator_env.py:396/400/418).
+# With this env the deploy fallback would therefore emit
+#   [cartesian(6), gripper(1), joints(6)]
+# which has the right length (13) but the WRONG order vs the checkpoint
+# ([joints, cartesian, gripper]). There is NO shape error — the policy
+# silently sees scrambled state.
+#
+# To deploy act_infinite (13-dim) correctly, `_get_obs` must insert the
+# joints sub-key BEFORE cartesian/gripper, OR the deploy/inference path must
+# reassemble observation.state in the explicit order above. Until that code
+# change lands, prefer the 7-dim `act_infinite_cart7` checkpoint with
+# ur10e_ridgeback_dual_cam_deploy_env.yaml (no code change needed).
+# ===========================================================================
+#
+# Usage (only after the _get_obs ordering fix is in place):
+#   pixi run -e jazzy-lerobot python examples/19_deploy_policy.py \
+#       --env-config ur10e_ridgeback_dual_cam_deploy_env_infinite \
+#       --pretrained-path outputs/train/act_infinite/checkpoints/last/pretrained_model ...
+#
+# Prerequisites — start BOTH cameras in separate terminals before launching:
+#   Terminal A:  cd clearpath_remote_ws && pixi run orbbec
+#   Terminal B:  cd clearpath_remote_ws && pixi run realsense
+
+control_frequency: 20.0
+use_relative_actions: false       # absolute target poses
+
+use_shared_executor: true
+
+protected_controllers:
+  - safety_observer_controller
+
+orientation_representation: "euler"
+
+# --- Robot Config ---
+robot_config:
+  robot_type: "ur"
+  joint_names:
+    - arm_0_elbow_joint
+    - arm_0_shoulder_lift_joint
+    - arm_0_shoulder_pan_joint
+    - arm_0_wrist_1_joint
+    - arm_0_wrist_2_joint
+    - arm_0_wrist_3_joint
+  home_config: [1.57, -1.5708, 1.5708, -1.5708, -1.5708, 0]
+  base_frame: "arm_0_base_link"
+  target_frame: "arm_0_gripper_tcp"
+  default_controller: "cartesian_controller"
+  cartesian_impedance_controller_name: "cartesian_controller"
+  joint_trajectory_controller_name: "joint_trajectory_controller"
+  target_pose_topic: "target_pose"
+  current_pose_topic: "current_pose"
+  current_joint_topic: "joint_states"
+  publish_frequency: 20.0
+  publish_target_pose: false
+
+# --- Gripper Config ---
+gripper_config:
+  min_value: 0.8
+  max_value: 0.0
+  command_topic: "/gripper/gripper_controller/gripper_cmd"
+  joint_state_topic: "/gripper/joint_states"
+  target_state_topic: "/target_gripper_state"
+  use_gripper_command_action: true
+  index: 0
+  max_delta: 1.0
+
+gripper_mode: "absolute_continuous"
+
+# --- Camera Config ---
+camera_configs:
+  - camera_name: "camera"
+    camera_frame: "camera_frame"
+    camera_color_image_topic: "/camera/color/image_raw"
+    camera_color_info_topic: "/camera/color/camera_info"
+    resolution: [480, 640]
+    max_image_delay: 1.0
+    use_shared_memory: true
+
+  - camera_name: "d405"
+    camera_frame: "d405_color_optical_frame"
+    camera_color_image_topic: "/d405/camera/color/image_rect_raw"
+    camera_color_info_topic: "/d405/camera/color/camera_info"
+    resolution: [480, 640]
+    max_image_delay: 0.5
+    use_shared_memory: true
+
+sensor_configs: []
+
+cartesian_control_param_config: null
+joint_control_param_config: null
+
+# --- Safety workspace limits (arm_0_base_link frame, metres) ---
+min_z: 0.05
+max_z: 1.2
+min_x: -1.0
+max_x: 1.0
+min_y: -1.0
+max_y: 1.0
+
+# --- Observation keys included in observation.state ---
+# DEPLOY SUBSET for the 13-dim `act_infinite` policy: joints + cartesian +
+# gripper. NOTE: the resulting concatenation order depends on _get_obs
+# insertion order, NOT this list — see the IMPORTANT block at the top.
+observations_to_include_to_state:
+  - "observation.state.joints"
+  - "observation.state.cartesian"
+  - "observation.state.gripper"

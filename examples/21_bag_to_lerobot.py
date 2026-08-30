@@ -11,17 +11,18 @@ LeRobot v3 dataset with the same feature schema as the live recorder —
 so existing training code just works. Duplicate rate with this path is
 typically <1%.
 
-Feature schema mirrors 16_camera_only_record.py (single-camera) and extends
-naturally to N cameras (multi-camera, e.g. ur10e_ridgeback_dual_cam_env):
+Default feature schema (matches the "cartesian + cameras + action" layout
+used by the SmolVLA / ACT models in this repo):
     observation.images.<name>                 video           (one per camera)
     observation.timestamps.wall               float64[1]      (bag recv time)
     observation.timestamps.<name>_header      float64[1]      (per-camera msg.header.stamp)
-    observation.state.joints                  float32[nq]     (if --no-joints off)
-    observation.state.cartesian               float32[6]      (if --no-pose   off)
-    observation.state.gripper                  float32[1]      (if --no-gripper-state off)
+    observation.state.cartesian               float32[6]      (--pose, default ON)
     observation.state                         float32[sum]
-    action                                    float32[7]      if --with-action
-                                              float32[1]      otherwise (dummy zero)
+    action                                    float32[7]      (--with-action, default ON)
+
+Optional add-ons (off by default — pass the matching flag to include):
+    observation.state.joints                  float32[nq]     (--joints)
+    observation.state.gripper                 float32[1]      (--gripper-state)
 
 Multi-camera behaviour:
   - When --camera-topic is omitted (default), the converter scans the bag's
@@ -91,6 +92,31 @@ GRIP_RAW_OPEN = 0.0    # raw value that corresponds to normalized 1.0 (open)
 # in the bag — physical teleop default is trigger released = gripper open,
 # which is normalized 1.0 in this convention.
 GRIP_NORMALIZED_DEFAULT = 1.0
+
+
+def _flip_rotvec_if_opposite(prev: np.ndarray | None, current: np.ndarray) -> np.ndarray:
+    """Keep a rotation-vector trajectory continuous across the SO(3) double cover.
+
+    Mirrors ``manipulator_env._flip_rotation_vector_if_needed`` (also present
+    standalone in ``scripts/dataset_conversions/fix_rotation_vectors_in_dataset.py``).
+    A rotation by ω and a rotation by −ω represent the SAME orientation, so
+    adjacent quaternion samples near θ=π can flip sign and produce a
+    synthetic discontinuity in the rotvec sequence. When the previous and
+    current rotvecs point in opposite directions (dot product < 0), negate
+    the current vector. On the first frame we force the first component
+    positive for a deterministic starting sign.
+
+    Kept inline (rather than imported) because both canonical sources are
+    either methods on the env class or scripts with top-level side effects;
+    promoting to a shared utility is a future cleanup.
+    """
+    if prev is not None:
+        if float(np.dot(prev, current)) < 0:
+            return -current
+        return current
+    if current[0] < 0:
+        return -current
+    return current
 
 
 def _normalize_grip(raw: float) -> float:
@@ -248,10 +274,10 @@ def convert(args: argparse.Namespace) -> None:
             )
 
     use_camera = not args.no_camera
-    use_joints = not args.no_joints
-    use_pose = not args.no_pose
-    use_gripper_state = not args.no_gripper_state
-    use_action = args.with_action
+    use_joints = bool(args.joints)
+    use_pose = bool(args.pose)
+    use_gripper_state = bool(args.gripper_state)
+    use_action = bool(args.with_action)
 
     # --- Resolve camera topics + names ---
     # Three modes:
@@ -390,11 +416,19 @@ def convert(args: argparse.Namespace) -> None:
     # --- Build features dict ---
     h, w = args.resolution
 
+    # Orientation representation for the cartesian state and the action's
+    # rotation slots. "angle_axis" (default) emits a rotation vector that
+    # matches what the env exposes on observation.state.cartesian when
+    # `orientation_representation: "angle_axis"` is set in the env yaml.
+    # "euler" matches the legacy behaviour (xyz Euler triplet).
+    use_angle_axis = args.orientation == "angle_axis"
+    cartesian_rot_names = ["rx", "ry", "rz"] if use_angle_axis else ["roll", "pitch", "yaw"]
+
     state_components = []
     if use_joints:
         state_components.append(("joints", len(args.joint_names), list(args.joint_names)))
     if use_pose:
-        state_components.append(("cartesian", 6, ["x", "y", "z", "roll", "pitch", "yaw"]))
+        state_components.append(("cartesian", 6, ["x", "y", "z", *cartesian_rot_names]))
     if use_gripper_state:
         state_components.append(("gripper", 1, ["gripper"]))
     if not state_components:
@@ -445,7 +479,7 @@ def convert(args: argparse.Namespace) -> None:
         features["action"] = {
             "dtype": "float32",
             "shape": (7,),
-            "names": ["x", "y", "z", "roll", "pitch", "yaw", "gripper"],
+            "names": ["x", "y", "z", *cartesian_rot_names, "gripper"],
         }
     else:
         features["action"] = {
@@ -479,6 +513,24 @@ def convert(args: argparse.Namespace) -> None:
     # camera publishing slower than fps we'll repeat the nearest sample.
     dup_last_camera_idx: dict[str, int | None] = {n: None for n in camera_names}
     duplicate_camera: dict[str, int] = {n: 0 for n in camera_names}
+
+    # Per-episode rotvec continuity state. Updated inside the angle-axis
+    # branches below; ignored when use_angle_axis is False.
+    prev_state_rotvec: np.ndarray | None = None
+    prev_action_rotvec: np.ndarray | None = None
+
+    # Held-frame detection ("stalls"). Mirrors compute_speed_schedule_drop_holds
+    # in 17_replay_dataset.py and the standalone scripts/crop_stalls.py:
+    # a frame whose commanded xyz is within --motion-eps of the previous
+    # frame's xyz is treated as a no-motion hold and dropped. The previous
+    # xyz updates EVERY iteration (kept or dropped) so a long slow drift of
+    # sub-eps steps is fully removed (matches np.diff over the original
+    # sequence). Requires --with-action; validated below in main().
+    drop_holds = bool(getattr(args, "drop_holds", False))
+    motion_eps = float(getattr(args, "motion_eps", 1e-6))
+    prev_action_xyz: np.ndarray | None = None
+    n_frames_written = 0
+    n_holds_dropped = 0
 
     for tick in range(n_ticks):
         target_ts = t_start_ns + tick * tick_period_ns
@@ -525,10 +577,19 @@ def convert(args: argparse.Namespace) -> None:
             pmsg = deserialize_message(records["pose"][p_idx][1], PoseStamped)
             p = pmsg.pose.position
             q = pmsg.pose.orientation
-            rpy = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_euler("xyz")
-            frame["observation.state.cartesian"] = np.array(
-                [p.x, p.y, p.z, rpy[0], rpy[1], rpy[2]], dtype=np.float32
-            )
+            rot = Rotation.from_quat([q.x, q.y, q.z, q.w])
+            if use_angle_axis:
+                rv = rot.as_rotvec().astype(np.float32)
+                rv = _flip_rotvec_if_opposite(prev_state_rotvec, rv)
+                prev_state_rotvec = rv
+                frame["observation.state.cartesian"] = np.array(
+                    [p.x, p.y, p.z, rv[0], rv[1], rv[2]], dtype=np.float32
+                )
+            else:
+                rpy = rot.as_euler("xyz")
+                frame["observation.state.cartesian"] = np.array(
+                    [p.x, p.y, p.z, rpy[0], rpy[1], rpy[2]], dtype=np.float32
+                )
 
         # ---- Gripper state ----
         if use_gripper_state:
@@ -562,10 +623,19 @@ def convert(args: argparse.Namespace) -> None:
             tp_msg = deserialize_message(records["target_pose"][tp_idx][1], PoseStamped)
             p = tp_msg.pose.position
             q = tp_msg.pose.orientation
-            rpy = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_euler("xyz")
-            tp_arr = np.array(
-                [p.x, p.y, p.z, rpy[0], rpy[1], rpy[2]], dtype=np.float32
-            )
+            rot = Rotation.from_quat([q.x, q.y, q.z, q.w])
+            if use_angle_axis:
+                rv = rot.as_rotvec().astype(np.float32)
+                rv = _flip_rotvec_if_opposite(prev_action_rotvec, rv)
+                prev_action_rotvec = rv
+                tp_arr = np.array(
+                    [p.x, p.y, p.z, rv[0], rv[1], rv[2]], dtype=np.float32
+                )
+            else:
+                rpy = rot.as_euler("xyz")
+                tp_arr = np.array(
+                    [p.x, p.y, p.z, rpy[0], rpy[1], rpy[2]], dtype=np.float32
+                )
             # /target_gripper_state is sparse and event-driven. Use last-known
             # value at or before target_ts; before the first message we default
             # to 1.0 = open (matches 16_camera_only_record.py's default).
@@ -582,6 +652,21 @@ def convert(args: argparse.Namespace) -> None:
             frame["action"] = np.concatenate(
                 [tp_arr, np.array([grip], dtype=np.float32)]
             ).astype(np.float32)
+
+            # ---- Held-frame detection ----
+            # Done here (action branch only) because the check needs the
+            # commanded xyz; tp_arr[0:3] is the target_pose xyz this tick.
+            # prev_action_xyz is updated on every iteration whether the
+            # frame is kept or dropped (see comment at init site).
+            if drop_holds:
+                cur_xyz = tp_arr[:3].astype(np.float64)
+                if prev_action_xyz is not None:
+                    step = float(np.linalg.norm(cur_xyz - prev_action_xyz))
+                    if step <= motion_eps:
+                        prev_action_xyz = cur_xyz
+                        n_holds_dropped += 1
+                        continue  # skip add_frame: frame is a stall
+                prev_action_xyz = cur_xyz
         else:
             frame["action"] = np.zeros(1, dtype=np.float32)
 
@@ -591,9 +676,17 @@ def convert(args: argparse.Namespace) -> None:
         else:
             frame["task"] = args.task
             dataset.add_frame(frame)
+        n_frames_written += 1
 
     logger.info("Finalising episode (video encoding, parquet write)...")
     dataset.save_episode()
+
+    if drop_holds:
+        pct = 100.0 * n_holds_dropped / max(1, n_ticks)
+        logger.info(
+            "Held-frame filter: dropped %d / %d frames (%.1f%%, motion_eps=%g).",
+            n_holds_dropped, n_ticks, pct, motion_eps,
+        )
 
     if use_camera:
         dup_summary = ", ".join(
@@ -604,12 +697,12 @@ def convert(args: argparse.Namespace) -> None:
         logger.info(
             "Done. Wrote %d frames to dataset %r. "
             "Per-camera duplicate samples at target fps: %s.",
-            n_ticks, args.repo_id, dup_summary,
+            n_frames_written, args.repo_id, dup_summary,
         )
     else:
         logger.info(
             "Done. Wrote %d frames to dataset %r. (No camera streams.)",
-            n_ticks, args.repo_id,
+            n_frames_written, args.repo_id,
         )
     logger.info(
         "Dataset cached at: ~/.cache/huggingface/lerobot/%s",
@@ -654,17 +747,64 @@ def main() -> None:
     parser.add_argument("--joint-topic", type=str, default="/joint_states")
     parser.add_argument("--joint-names", type=str, nargs="+",
                         default=DEFAULT_JOINT_NAMES)
-    parser.add_argument("--no-joints", action="store_true", default=False)
+    parser.add_argument(
+        "--joints", action=argparse.BooleanOptionalAction, default=False,
+        help="Include observation.state.joints in the dataset. Default OFF "
+             "(matches the cartesian-only schema used by SmolVLA / ACT models "
+             "in this repo). Pass --joints to include them; --no-joints is "
+             "also accepted for backward compatibility (same as the default).",
+    )
 
     parser.add_argument("--pose-topic", type=str, default="/current_pose")
-    parser.add_argument("--no-pose", action="store_true", default=False)
+    parser.add_argument(
+        "--pose", action=argparse.BooleanOptionalAction, default=True,
+        help="Include observation.state.cartesian (current EE pose) in the "
+             "dataset. Default ON. Pass --no-pose to omit.",
+    )
 
     parser.add_argument("--gripper-state-topic", type=str, default="/gripper/joint_states")
-    parser.add_argument("--no-gripper-state", action="store_true", default=False,
-                        help="Skip observation.state.gripper even if the topic is present.")
+    parser.add_argument(
+        "--gripper-state", action=argparse.BooleanOptionalAction, default=False,
+        help="Include observation.state.gripper in the dataset. Default OFF "
+             "(matches the 'nogrip' observation schema the deployed models "
+             "expect). Pass --gripper-state to include the gripper joint "
+             "reading; --no-gripper-state is also accepted as the default.",
+    )
 
-    parser.add_argument("--with-action", action="store_true", default=False,
-                        help="Include action from target pose + gripper topics.")
+    parser.add_argument(
+        "--orientation", type=str, default="angle_axis",
+        choices=["angle_axis", "euler"],
+        help="Rotation encoding for observation.state.cartesian and action. "
+             "'angle_axis' (default) emits a rotation vector and applies the "
+             "same antipodal-flip continuity fix the env uses on the live "
+             "observation (manipulator_env._flip_rotation_vector_if_needed) — "
+             "match this with `orientation_representation: angle_axis` in your "
+             "env yaml at deploy time. 'euler' restores the legacy xyz-Euler "
+             "encoding. Column names switch between rx/ry/rz and roll/pitch/yaw "
+             "accordingly.",
+    )
+    parser.add_argument(
+        "--with-action", action=argparse.BooleanOptionalAction, default=True,
+        help="Include the action feature (target pose + gripper action) in "
+             "the dataset. Default ON. Pass --no-with-action to record an "
+             "obs-only dataset.",
+    )
+    parser.add_argument(
+        "--drop-holds", action=argparse.BooleanOptionalAction, default=True,
+        help="Filter out 'held' frames where the commanded xyz barely moves "
+             "(||action_pos[i] - action_pos[i-1]|| <= --motion-eps). Same "
+             "definition as scripts/crop_stalls.py and "
+             "compute_speed_schedule_drop_holds() in 17_replay_dataset.py, "
+             "applied online so no separate dataset-rewrite pass is needed. "
+             "Default is ON; pass --no-drop-holds to keep every frame. "
+             "Silently disabled if --with-action is not set (the check is "
+             "on the commanded pose, not the measured state).",
+    )
+    parser.add_argument(
+        "--motion-eps", type=float, default=1e-6,
+        help="Hold threshold on commanded xyz step (default 1e-6). Only used "
+             "with --drop-holds.",
+    )
     parser.add_argument("--target-pose-topic", type=str, default="/target_pose")
     parser.add_argument("--gripper-target-topic", type=str, default="/target_gripper_state")
 
@@ -679,6 +819,18 @@ def main() -> None:
         level=args.log_level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+
+    if args.drop_holds and not args.with_action:
+        # Don't error out: --drop-holds is now ON by default, and we don't
+        # want to break workflows that legitimately convert without action
+        # features. Disable the filter silently (with a warning) instead.
+        logger.warning(
+            "--drop-holds is ON but --with-action is not set; the held "
+            "check needs the commanded pose, so it will be disabled. "
+            "Pass --no-drop-holds to silence this warning, or --with-action "
+            "to enable hold-dropping.",
+        )
+        args.drop_holds = False
 
     convert(args)
 

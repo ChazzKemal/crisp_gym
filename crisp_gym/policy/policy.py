@@ -1,5 +1,6 @@
 """Abstract base class and registry for Policies."""
 
+import importlib
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Tuple, TypeAlias
 
@@ -13,6 +14,19 @@ Observation: TypeAlias = dict[str, Any]
 
 
 policy_registry = {}
+
+# `@register_policy` only runs when the module defining the class is imported, and
+# the policy modules are imported lazily on purpose -- they pull in cv2/torch, and
+# async_smolvla_policy additionally needs the RTC-capable LeRobot fork. So a name
+# can be missing from the registry simply because nothing has imported its module
+# yet, which is how "smolvla_rtc_policy" was unreachable through make_policy():
+# crisp_gym/policy/__init__.py imported only the other two. Map each name to its
+# provider module and import on demand instead of eagerly at package import.
+_LAZY_POLICY_MODULES = {
+    "lerobot_policy": "crisp_gym.policy.lerobot_policy",
+    "async_lerobot_policy": "crisp_gym.policy.async_lerobot_policy",
+    "smolvla_rtc_policy": "crisp_gym.policy.async_smolvla_policy",
+}
 
 
 class Policy(ABC):
@@ -70,9 +84,14 @@ def make_policy(name_or_config_name, *args, **kwargs) -> Policy:  # noqa: ANN001
         name = name_or_config_name
 
     policy_cls = policy_registry.get(name)
+    if policy_cls is None and name in _LAZY_POLICY_MODULES:
+        # Not registered yet only because its module has not been imported.
+        importlib.import_module(_LAZY_POLICY_MODULES[name])
+        policy_cls = policy_registry.get(name)
     if policy_cls is None:
+        known = sorted(set(policy_registry) | set(_LAZY_POLICY_MODULES))
         raise ValueError(
-            f"Policy '{name}' is not registered. Available policies: {list(policy_registry.keys())}",
+            f"Policy '{name}' is not registered. Available policies: {known}",
             f"{'Make sure the policy is registered and the config file exists: ' + str(file_path) if file_path is not None else ''}",
         )
 

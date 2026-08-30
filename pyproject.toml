@@ -49,7 +49,19 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-exclude = ["config"]
+# Only the importable library ships. `exclude = ["config"]` used to sit here, but
+# it matched a top-level `config` package that does not exist, while the real
+# problem was the opposite: crisp_gym.{config,record,scripts,teleop,util} had no
+# __init__.py, so find_packages() returned only crisp_gym{,.envs,.policy} and a
+# wheel silently omitted crisp_gym.config.path and crisp_gym.util.lerobot_features
+# -- both imported by the deploy path -- plus every [project.scripts] entry point.
+include = ["crisp_gym*"]
+
+[tool.setuptools.package-data]
+# The bundled YAML defaults are resolved at runtime through
+# importlib.resources.files("crisp_gym")/"config" (crisp_gym/config/path.py), so
+# they must be in the wheel. The config subdirectories are data, not packages.
+"crisp_gym.config" = ["*.yaml", "*/*.yaml", "**/*.yaml"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "D", "TCH", "ANN"]

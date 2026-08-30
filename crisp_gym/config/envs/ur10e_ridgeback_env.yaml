@@ -22,6 +22,13 @@
 control_frequency: 20.0
 use_relative_actions: false       # absolute target poses
 
+# Consolidate Robot + Gripper + Camera (+ any Sensors) onto ONE shared
+# MultiThreadedExecutor + spin thread. Eliminates the per-component
+# rclpy wait-set GIL contention identified in
+# docs/troubleshooting_deploy_gil_contention.md. Same win as the dual_cam
+# env (415× faster get_obs p99, 13× fewer late frames).
+use_shared_executor: true
+
 # Controllers that must stay active through every env.switch_controller() call.
 # The safety_observer_controller claims no command interfaces, so keeping it
 # active across cartesian<->joint switches is safe and required — otherwise the
@@ -77,6 +84,12 @@ gripper_config:
   use_gripper_command_action: true
   index: 0
   max_delta: 1.0
+  # The teleop node is the authoritative driver of the gripper command topic
+  # (/gripper/gripper_controller/gripper_cmd). Set this false so the crisp_py
+  # Gripper client only subscribes to joint/target state instead of also
+  # sending GripperCommand goals — otherwise two action clients preempt each
+  # other ~30 Hz and the gripper stalls. Mirrors robot_config.publish_target_pose.
+  publish_gripper_command: false
 
 gripper_mode: "absolute_continuous"
 
