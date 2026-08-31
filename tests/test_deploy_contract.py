@@ -127,3 +127,33 @@ def test_publish_channels_carries_what_the_sender_needs():
               "gripper_action_client", "gripper_max_effort",
               "gripper_unnormalize_fn", "gripper_enabled"):
         assert hasattr(ch, f), f
+
+
+def test_run_record_ships_the_buckets_the_loop_writes_to():
+    """The loop indexes these directly; a bare {} KeyErrors on the first chunk.
+
+    That failure lands after the robot is homed, the controller switched and the
+    sender running — the most expensive point at which to discover a missing dict
+    key — so the default carries them.
+    """
+    from pathlib import Path
+
+    from crisp_gym.deploy.trace import PRODUCER_STAGES, RunRecord
+
+    r = RunRecord(out_dir=Path("/tmp/x"), run_started_at="t", duration_s=0.0,
+                  n_obs=1, n_act=8, chunk_count=0, stopped_by="init")
+    for stage in PRODUCER_STAGES:
+        assert stage in r.stage_samples_producer, f"missing bucket {stage!r}"
+        r.stage_samples_producer[stage].append(1.0)   # must not raise
+
+
+def test_two_records_do_not_share_buckets():
+    """default_factory, not a shared default — one run's timings must not leak."""
+    from pathlib import Path
+
+    from crisp_gym.deploy.trace import RunRecord
+    mk = lambda: RunRecord(out_dir=Path("/tmp/x"), run_started_at="t", duration_s=0.0,
+                           n_obs=1, n_act=8, chunk_count=0, stopped_by="init")
+    a, b = mk(), mk()
+    a.stage_samples_producer["get_obs_ms"].append(1.0)
+    assert b.stage_samples_producer["get_obs_ms"] == []

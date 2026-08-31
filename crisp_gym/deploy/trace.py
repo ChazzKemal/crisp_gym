@@ -26,6 +26,18 @@ from crisp_gym.deploy.timing import CONTROL_DT
 
 logger = logging.getLogger(__name__)
 
+#: Timing buckets the producer loop appends to, once per chunk. They are created up
+#: front rather than on demand because the loop indexes them directly -- a runner that
+#: handed over a bare {} got a KeyError on the first chunk, after the robot was
+#: already homed and the sender running.
+PRODUCER_STAGES = (
+    "get_obs_ms",     # env._get_obs() through crisp_py
+    "synth_ms",       # chunk source request (inference, for a real policy)
+    "build_ms",       # speed schedule + cycle-snap + pose pre-compute
+    "push_ms",        # K x q.put()
+    "drain_wait_ms",  # waiting for the queue to fall to the overlap threshold
+)
+
 
 @dataclass
 class RunRecord:
@@ -42,7 +54,9 @@ class RunRecord:
     chunk_rows: list[dict] = field(default_factory=list)
     pred_dt_samples: list[float] = field(default_factory=list)
     pred_dt_samples_shadow: list[float] = field(default_factory=list)
-    stage_samples_producer: dict[str, list[float]] = field(default_factory=dict)
+    stage_samples_producer: dict[str, list[float]] = field(
+        default_factory=lambda: {k: [] for k in PRODUCER_STAGES}
+    )
     sender_stage_samples: dict[str, Any] = field(default_factory=dict)
     trace_records: list[Any] = field(default_factory=list)
     trace_images_buf: list[Any] = field(default_factory=list)
