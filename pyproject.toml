@@ -8,6 +8,11 @@ dependencies = [
     "ruff>=0.11.9",
     "gymnasium>=0.26.3,<2",
     "scipy>=1.15.2,<2",
+    # Used throughout; previously undeclared and only present because the pixi env
+    # happened to pull them in. A pinned install elsewhere (Pace's real env) found
+    # crisp_gym.deploy.dataset importing pandas that was not there.
+    "numpy>=1.26",
+    "pandas>=2.0",
     "crisp_python>=3.0.0,<4",
     "rich>=14.0.0, <15",
 ]

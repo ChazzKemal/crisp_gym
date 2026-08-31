@@ -5,10 +5,14 @@ Moved out of ``examples/17_replay_dataset.py``. Used by dataset replay and by
 with no policy and no GPU -- the cheapest way to exercise deploy end to end.
 """
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
+if TYPE_CHECKING:                       # annotations only; no runtime import
+    import pandas as pd
 
 # Where the LeRobot v3 datasets live (HF_LEROBOT_HOME).
 LEROBOT_CACHE = Path.home() / ".cache/huggingface/lerobot"
@@ -32,8 +36,10 @@ def load_dataset_info(dataset_dir: Path) -> dict:
     return info
 
 
-def load_episodes_meta(dataset_dir: Path) -> pd.DataFrame:
+def load_episodes_meta(dataset_dir: Path) -> "pd.DataFrame":
     """Read meta/episodes/.../file-*.parquet into a DataFrame."""
+    import pandas as pd
+
     parts = sorted((dataset_dir / "meta" / "episodes").rglob("file-*.parquet"))
     if not parts:
         raise FileNotFoundError(
@@ -43,9 +49,11 @@ def load_episodes_meta(dataset_dir: Path) -> pd.DataFrame:
 
 
 def load_episode_frames(
-    dataset_dir: Path, info: dict, episodes_df: pd.DataFrame, episode_idx: int
-) -> pd.DataFrame:
+    dataset_dir: Path, info: dict, episodes_df: "pd.DataFrame", episode_idx: int
+) -> "pd.DataFrame":
     """Load the per-frame parquet for one episode."""
+    import pandas as pd
+
     match = episodes_df[episodes_df["episode_index"] == episode_idx]
     if match.empty:
         available = sorted(episodes_df["episode_index"].astype(int).tolist())
