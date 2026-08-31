@@ -13,13 +13,13 @@ import rich
 
 from crisp_gym.util.control_type import ControlType
 
-try:
-    from lerobot.datasets.lerobot_dataset import CODEBASE_VERSION
-except ImportError:
-    raise ImportError(
-        "The 'lerobot' package is required to use this function. "
-        "Please use a lerobot environment 'pixi shell -e <rosdistro>-lerobot'."
-    )
+# CODEBASE_VERSION lives in lerobot.datasets, and importing that package pulls in the
+# HuggingFace `datasets` library -- which newer lerobot revisions put behind an
+# optional [dataset] extra. Only get_features() below reads the constant, while the
+# deploy path imports this module solely for concatenate_state_features and
+# numpy_obs_to_torch, which are plain array plumbing. A module-level import therefore
+# made every deploy require a dataset stack it never touches, and fail without it.
+# Imported where it is used instead.
 
 import logging
 
@@ -39,6 +39,15 @@ def get_features(
         use_video (bool): Whether to include video features. Defaults to True.
         ignore_keys (list[str], optional): List of observation keys to ignore. Defaults to None.
     """
+    try:
+        from lerobot.datasets.lerobot_dataset import CODEBASE_VERSION
+    except ImportError as exc:            # noqa: F841 - message is explicit enough
+        raise ImportError(
+            "get_features() needs lerobot's dataset support: "
+            "pip install 'lerobot[dataset]'. Deployment does not require it -- only "
+            "recording and feature generation do."
+        ) from exc
+
     if not CODEBASE_VERSION.startswith("v2"):
         logger.warning(
             "Feature generation for LeRobot has been implemented for version 2.x of LeRobotDataset. Expect unexpected behaviour for other versions."
