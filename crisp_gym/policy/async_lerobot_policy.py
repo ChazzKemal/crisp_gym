@@ -300,14 +300,19 @@ def inference_worker(  # noqa: D417
                 f"Policy config {type(policy_config).__name__} exposes neither "
                 f"`chunk_size` nor `horizon`; cannot validate steps={steps}."
             )
-        if steps >= horizon:
-            raise ValueError(
-                f"The policy steps={steps} must be smaller than the horizon={horizon}."
-                "Please modify your cli."
-            )
-        # Diffusion adds the stricter `n_action_steps <= horizon - n_obs_steps + 1`
-        # constraint. n_obs_steps defaults to 1 for ACT (which has no such
-        # constraint) so this check degrades to `steps <= horizon` there.
+        # `n_action_steps <= horizon - n_obs_steps + 1` is the whole rule, stated by
+        # LeRobot itself (diffusion/modeling_diffusion.py:142). It subsumes any
+        # `steps < horizon` test: its threshold is lower whenever n_obs_steps >= 1,
+        # which is always. A separate `steps >= horizon` check used to sit here and
+        # was strictly wrong at the boundary -- it rejected n_action_steps ==
+        # chunk_size, which LeRobot's own ACT config permits
+        # (act/configuration_act.py only errors when n_action_steps > chunk_size).
+        # That made a B-spline checkpoint undeployable: its parameter matrix is one
+        # curve's knots and control points, so the policy must emit every row, and
+        # training sets n_action_steps == chunk_size == the matrix width. There is no
+        # smaller correct value -- a prefix of the rows is a different, shorter curve.
+        # For ACT (n_obs_steps forced to 1) this check reduces to `steps <= horizon`,
+        # which is exactly LeRobot's rule; for diffusion it stays strictly tighter.
         n_obs_steps_cfg = int(getattr(policy_config, "n_obs_steps", 1))
         if steps > horizon - n_obs_steps_cfg + 1:
             raise ValueError(

@@ -194,10 +194,9 @@ class _SyncLeRobotChunkSource:
             horizon = getattr(policy_config, "chunk_size", None)
             if horizon is None:
                 horizon = getattr(policy_config, "horizon", None)
-            if horizon is not None and steps_req >= int(horizon):
-                raise ValueError(
-                    f"--n-act={steps_req} must be < horizon/chunk_size={horizon}."
-                )
+            # See async_lerobot_policy: `n_action_steps <= horizon - n_obs_steps + 1`
+            # is the whole rule and subsumes any `steps < horizon` test, which was
+            # wrong at the boundary and made B-spline checkpoints undeployable.
             n_obs_steps_cfg = int(getattr(policy_config, "n_obs_steps", 1))
             if horizon is not None and steps_req > int(horizon) - n_obs_steps_cfg + 1:
                 raise ValueError(
