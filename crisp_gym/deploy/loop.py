@@ -259,11 +259,14 @@ def run_producer_loop(
                 )
                 continue
 
-            # 2d. Chunk-seam blending (temporal ensembling). Hold back the
-            #     last N raw frames of this chunk; average them with the next
-            #     chunk's first N frames, ramping the weight old->new so the
-            #     seam stays continuous with what's executing but converges to
-            #     the fresher prediction. Operates on the RAW action array
+            # 2d. Chunk-seam blending, part 1 of 2 (temporal ensembling):
+            #     fold the PREVIOUS chunk's held-back tail into this chunk's
+            #     first N frames, ramping the weight old->new so the seam stays
+            #     continuous with what's executing but converges to the fresher
+            #     prediction. Part 2 -- holding back this chunk's own tail --
+            #     is step 3c, after the method pipeline has finished reshaping
+            #     rows; see docs/seam_blending.md for why the halves are
+            #     separated. Operates on the RAW action array
             #     (xyz + rotvec) BEFORE pose/quat conversion; the gripper
             #     channel [6] is NEVER averaged (binary) — it takes the new
             #     chunk's value. Producer-side → applies to both senders. N is
@@ -335,18 +338,6 @@ def run_producer_loop(
                                 chunk[i, :6] = (
                                     (1.0 - w) * blend_carry[i, :6] + w * chunk[i, :6]
                                 )
-                blend_carry = chunk[K - N:].copy()   # hold back for next seam
-                chunk = chunk[: K - N].copy()         # emit the rest now
-                K = chunk.shape[0]
-                # Save the last 2 actually-emitted frames for the next
-                # iteration's Hermite v_start. Only needed in hermite mode,
-                # but the cost is one ndarray copy of shape (2, 7) per
-                # chunk so we do it unconditionally to keep the code paths
-                # symmetric. K >= 2 by the outer `if K >= 2` guard above
-                # (post-emit K is K_orig - N, which is >= K_orig // 2 >= 1;
-                # for K_orig >= 4 it's >= 2).
-                if K >= 2:
-                    prev_emitted_tail = chunk[K - 2:K].copy()
 
             # 3. Speed schedule on the (possibly strided) chunk.
             _t_stage = time.perf_counter()
@@ -364,6 +355,37 @@ def run_producer_loop(
                 s_raw = _build_chunk_speed_schedule(
                     chunk.astype(np.float64), args, past_buffer=past,
                 )
+
+            # 3c. Chunk-seam blending, part 2 of 2: hold back the last N
+            #     *emitted* rows as the carry for the next seam.
+            #
+            #     MUST run after step 3. A method's steps reshape the row set --
+            #     PaceSpeed truncates to n_action_steps, GripperReplicate
+            #     inserts rows -- so only here is `chunk` the set of rows that
+            #     will actually be sent. Capturing the carry before the pipeline
+            #     (as this did until 2026-08-31) held back rows from the far end
+            #     of a plan that was then discarded, so the next chunk's head
+            #     was blended toward a pose ~65 frames further along the
+            #     trajectory: 236 mm mean on pickplace_cart7_v2, against 22 mm
+            #     of genuine motion across the window.
+            #
+            #     Placed BEFORE 3b so the gripper window still sees exactly the
+            #     emitted rows and its cross-chunk carry advances by the number
+            #     of frames actually executed.
+            #
+            #     s_raw is sliced alongside chunk: from step 3 on, every row
+            #     carries a speed and the two arrays must stay aligned.
+            if args.blend_overlap > 0 and K >= 2:
+                N_hold = min(int(args.blend_overlap), K // 2)
+                K_emit = K - N_hold
+                blend_carry = chunk[K_emit:].copy()   # hold back for next seam
+                chunk = chunk[:K_emit].copy()         # emit the rest now
+                s_raw = s_raw[:K_emit].copy()
+                K = chunk.shape[0]
+                # Last 2 actually-emitted frames seed the next iteration's
+                # Hermite v_start. K >= 2 whenever K_orig >= 4.
+                if K >= 2:
+                    prev_emitted_tail = chunk[K - 2:K].copy()
 
             # 3b. Gripper-grab slowdown (--gripper-slowdown-frames). On each
             #     open→close transition, force s_raw = 1.0 (real-time) for that
